@@ -1,0 +1,27 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build Escape Room",
+      "type": "shell",
+      "command": "g++",
+      "args": [
+        "-Wall",
+        "-Wextra",
+        "-g3",
+        "-std=c++17",
+        "${workspaceFolder}/main.cpp",
+        "-o",
+        "${workspaceFolder}/output/main.exe",
+        "-lfreeglut",
+        "-lopengl32",
+        "-lglu32"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": ["$gcc"]
+    }
+  ]
+}
