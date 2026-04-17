@@ -1,3 +1,4 @@
+
 #include <GL/glut.h>
 #include <cmath>
 #include <cctype>
@@ -74,10 +75,10 @@ const char* levelNames[TOTAL_LEVELS] = {"Easy", "Medium", "Hard", "Ground"};
 const LevelType levelTypes[TOTAL_LEVELS] = {LEVEL_ROOM, LEVEL_ROOM, LEVEL_ROOM, LEVEL_GROUND};
 const float levelHalfSizes[TOTAL_LEVELS] = {ROOM_HALF_SIZE, ROOM_HALF_SIZE, ROOM_HALF_SIZE, GROUND_HALF_SIZE};
 const int keysRequiredByLevel[TOTAL_LEVELS] = {1, 2, 3, 0};
-const int obstacleCountByLevel[TOTAL_LEVELS] = {3, 4, 6, 3};
+const int obstacleCountByLevel[TOTAL_LEVELS] = {3, 4, 4, 3};
 const float moveSpeedScale[TOTAL_LEVELS] = {1.00f, 0.92f, 0.84f, 1.00f};
 const float pickupRadiusByLevel[TOTAL_LEVELS] = {0.95f, 0.82f, 0.72f, 0.90f};
-const float levelTimeLimitByLevel[TOTAL_LEVELS] = {10.0f, 15.0f, 20.0f, 20.0f};
+const float levelTimeLimitByLevel[TOTAL_LEVELS] = {10.0f, 20.0f, 30.0f, 20.0f};
 const float doorWidthByLevel[TOTAL_LEVELS] = {1.6f, 1.6f, 1.6f, 2.6f};
 const float doorHeightByLevel[TOTAL_LEVELS] = {2.6f, 2.6f, 2.6f, 3.6f};
 const float doorThicknessByLevel[TOTAL_LEVELS] = {0.16f, 0.16f, 0.16f, 0.20f};
@@ -197,15 +198,20 @@ float fallStartCamY = PLAYER_EYE_HEIGHT;
 const int GHOST_MAX_HEALTH = 6;
 const float GHOST_MOVE_SPEED = 1.25f;
 const float GHOST_TOUCH_DAMAGE_RANGE = 1.15f;
-const float GHOST_WEAPON_RANGE = 2.55f;
+const float GHOST_WEAPON_RANGE = 15.0f; // Gun range - much longer than sword
 const float GHOST_BODY_RADIUS = 0.85f;
 const float INTERACT_PICKUP_RANGE = 1.60f;
 const float MEDKIT_HOLD_REQUIRED = 1.0f;
 
-bool ghostAlive = false;
-int ghostHealth = GHOST_MAX_HEALTH;
-float ghostX = 0.0f;
-float ghostZ = -5.8f;
+const int NUM_WARRIORS = 6;
+bool ghostAlive[NUM_WARRIORS] = {false, false, false, false, false, false};
+int  ghostHealth[NUM_WARRIORS];
+float ghostX[NUM_WARRIORS];
+float ghostZ[NUM_WARRIORS];
+float ghostHitFlashTimer[NUM_WARRIORS] = {0};
+// Spread-out starting positions
+const float WARRIOR_START_X[NUM_WARRIORS] = {  0.0f, -7.0f,  7.0f, -5.0f,  5.0f,  0.0f };
+const float WARRIOR_START_Z[NUM_WARRIORS] = { -6.0f, -2.0f, -2.0f,  6.0f,  6.0f, 10.0f };
 Vec2 weaponPickupPos = {-7.0f, 10.5f};
 Vec2 healthPickupPos = {7.0f, 9.8f};
 bool weaponClaimed = false;
@@ -215,7 +221,36 @@ bool medkitUsed = false;
 float medkitHoldTimer = 0.0f;
 bool groundIntroActive = false;
 float swordSwingTimer = 0.0f;
-float ghostHitFlashTimer = 0.0f;
+bool wave2Spawned = false;
+
+// ---- Gun / shooting variables ----
+float gunRecoilTimer = 0.0f;
+float muzzleFlashTimer = 0.0f;
+
+// ---- Torch flicker variables ----
+struct TorchFlicker {
+    float rate;
+    float phase;
+    float intensity;
+};
+TorchFlicker torchFlickers[4];
+
+// ---- Lava crack pulse ----
+float lavaPulsePhase = 0.0f;
+
+// ---- Bonus Clock Pickup (Level 3+) ----
+bool bonusClockActive = false;
+float bonusClockX = 0.0f;
+float bonusClockZ = 0.0f;
+float bonusClockSpawnTimer = 0.0f; // countdown to next spawn
+float bonusClockNextInterval = 7.0f; // random 5-11
+float bonusClockBannerTimer = 0.0f; // "+8 SEC!" display timer
+const float BONUS_CLOCK_RADIUS = 0.9f;
+const float BONUS_CLOCK_TIME_BONUS = 8.0f;
+
+// ---- Obstacle hit counter (5 hits = instant game over) ----
+int obstacleHitCount = 0;
+const int MAX_OBSTACLE_HITS = 5;
 
 bool keyStates[256] = {false};
 bool specialStates[256] = {false};
@@ -225,6 +260,7 @@ int lastMouseY = 0;
 
 void startLevel(int levelIndex);
 void damagePlayer(int amount, bool bypassCooldown = false);
+void handleObstacleHit();
 void tryGhostAttack();
 
 float clampf(float value, float low, float high) {
@@ -284,6 +320,10 @@ float currentDoorThickness() {
 
 float currentDoorZ() {
     return -worldHalfSize() + WALL_THICKNESS * 0.5f;
+}
+
+float randFloat(float lo, float hi) {
+    return lo + static_cast<float>(rand()) / static_cast<float>(RAND_MAX) * (hi - lo);
 }
 
 void drawBox(float x, float y, float z, float sx, float sy, float sz) {
@@ -427,6 +467,23 @@ void returnToMenuAfterFailure() {
     resetInputStates();
 }
 
+void initTorchFlickers() {
+    for (int i = 0; i < 4; ++i) {
+        torchFlickers[i].rate = randFloat(3.5f, 7.0f);
+        torchFlickers[i].phase = randFloat(0.0f, 6.28f);
+        torchFlickers[i].intensity = randFloat(0.7f, 1.0f);
+    }
+}
+
+void spawnBonusClock() {
+    float hs = worldHalfSize();
+    float margin = 1.5f;
+    bonusClockX = randFloat(-hs + margin, hs - margin);
+    bonusClockZ = randFloat(-hs + margin, hs - margin);
+    bonusClockActive = true;
+    cout << "Bonus clock spawned!\n";
+}
+
 void resetLevelCore() {
     keysCollected = 0;
     for (int i = 0; i < MAX_KEYS; ++i) {
@@ -448,10 +505,16 @@ void resetLevelCore() {
     airborne = false;
     fallStartCamY = camY;
 
-    ghostAlive = isGroundLevel();
-    ghostHealth = GHOST_MAX_HEALTH;
-    ghostX = 0.0f;
-    ghostZ = -5.8f;
+    // Init 6 warriors, but only first 2 are active in wave 1
+    bool groundActive = isGroundLevel();
+    for (int gi = 0; gi < NUM_WARRIORS; ++gi) {
+        ghostAlive[gi]          = groundActive && (gi < 2);
+        ghostHealth[gi]         = GHOST_MAX_HEALTH;
+        ghostX[gi]              = WARRIOR_START_X[gi];
+        ghostZ[gi]              = WARRIOR_START_Z[gi];
+        ghostHitFlashTimer[gi]  = 0.0f;
+    }
+    wave2Spawned = false;
     weaponClaimed = false;
     healthPickupClaimed = false;
     groundDoorUnlockedByBoss = false;
@@ -459,10 +522,20 @@ void resetLevelCore() {
     medkitHoldTimer = 0.0f;
     groundIntroActive = isGroundLevel();
     swordSwingTimer = 0.0f;
-    ghostHitFlashTimer = 0.0f;
+    gunRecoilTimer = 0.0f;
+    muzzleFlashTimer = 0.0f;
+
+    // Bonus clock reset
+    bonusClockActive = false;
+    bonusClockBannerTimer = 0.0f;
+    bonusClockSpawnTimer = randFloat(5.0f, 11.0f);
+
+    // Reset obstacle hit counter each level
+    obstacleHitCount = 0;
 
     mouseInitialized = false;
     resetInputStates();
+    initTorchFlickers();
 }
 
 void startLevel(int levelIndex) {
@@ -475,10 +548,12 @@ void startLevel(int levelIndex) {
         activeObstacles[i].dz = 0.0f;
 
         if (currentLevel == 1 || currentLevel == 2) {
-            float vx = (static_cast<float>(rand() % 200) / 100.0f - 1.0f) * 0.95f;
-            float vz = (static_cast<float>(rand() % 200) / 100.0f - 1.0f) * 0.95f;
-            if (fabs(vx) < 0.25f) vx = (vx < 0.0f) ? -0.25f : 0.25f;
-            if (fabs(vz) < 0.25f) vz = (vz < 0.0f) ? -0.25f : 0.25f;
+            // Level 3 (Hard) now has much slower obstacle movement
+            float speedMult = (currentLevel == 2) ? 0.35f : 0.95f;
+            float vx = (static_cast<float>(rand() % 200) / 100.0f - 1.0f) * speedMult;
+            float vz = (static_cast<float>(rand() % 200) / 100.0f - 1.0f) * speedMult;
+            if (fabs(vx) < 0.15f) vx = (vx < 0.0f) ? -0.15f : 0.15f;
+            if (fabs(vz) < 0.15f) vz = (vz < 0.0f) ? -0.15f : 0.15f;
             activeObstacles[i].dx = vx;
             activeObstacles[i].dz = vz;
         }
@@ -543,7 +618,7 @@ bool collidesWithObstacle(float x, float z, float feetHeight) {
 
 bool canMoveTo(float newX, float newZ) {
     float halfSize = worldHalfSize();
-    float minBound = -halfSize + WALL_THICKNESS + PLAYER_RADIUS + 0.15f; // Add tiny padding to prevent instant spawn deaths
+    float minBound = -halfSize + WALL_THICKNESS + PLAYER_RADIUS + 0.15f;
     float maxBound = halfSize - WALL_THICKNESS - PLAYER_RADIUS - 0.15f;
 
     if (newX < minBound || newX > maxBound || newZ > maxBound) {
@@ -559,19 +634,39 @@ bool canMoveTo(float newX, float newZ) {
 
     float feetHeight = camY - PLAYER_EYE_HEIGHT;
     if (collidesWithObstacle(newX, newZ, feetHeight)) {
-        damagePlayer(1, false);
+        handleObstacleHit();
         return false;
     }
 
-    if (isGroundLevel() && ghostAlive) {
-        float ghostDistance = distance2D(newX, newZ, ghostX, ghostZ);
-        if (ghostDistance < GHOST_BODY_RADIUS) {
-            damagePlayer(1, false);
-            return false;
+    if (isGroundLevel()) {
+        for (int gi = 0; gi < NUM_WARRIORS; ++gi) {
+            if (!ghostAlive[gi]) continue;
+            float ghostDistance = distance2D(newX, newZ, ghostX[gi], ghostZ[gi]);
+            if (ghostDistance < GHOST_BODY_RADIUS) {
+                damagePlayer(1, false);
+                return false;
+            }
         }
     }
 
     return true;
+}
+
+void handleObstacleHit() {
+    if (gameState != STATE_PLAYING) return;
+    if (damageCooldown > 0.0f) return;  // cooldown prevents rapid-fire hits
+
+    damageCooldown = 1.5f;
+    obstacleHitCount++;
+    cout << "Obstacle hit! " << obstacleHitCount << "/" << MAX_OBSTACLE_HITS << "\n";
+
+    if (obstacleHitCount >= MAX_OBSTACLE_HITS) {
+        obstacleHitCount = MAX_OBSTACLE_HITS;
+        gameOver = true;
+        gameState = STATE_GAME_OVER;
+        resetInputStates();
+        cout << "Game over! Touched obstacle " << MAX_OBSTACLE_HITS << " times.\n";
+    }
 }
 
 void damagePlayer(int amount, bool bypassCooldown) {
@@ -583,7 +678,7 @@ void damagePlayer(int amount, bool bypassCooldown) {
         return;
     }
 
-    damageCooldown = 1.5f; // Increased cooldown to give a distinct flashing red warning
+    damageCooldown = 1.5f;
     playerLives -= amount;
     if (playerLives <= 0) {
         playerLives = 0;
@@ -595,7 +690,420 @@ void damagePlayer(int amount, bool bypassCooldown) {
     }
 
     cout << "Health lost. Health left: " << playerLives << "\n";
-    // We no longer restart the level! You keep your progress but lose a life.
+}
+
+// =============================================
+// ENVIRONMENT DECORATION RENDERING
+// =============================================
+
+void renderTorch(float x, float y, float z, int torchIndex) {
+    float time = static_cast<float>(glutGet(GLUT_ELAPSED_TIME)) / 1000.0f;
+    TorchFlicker& tf = torchFlickers[torchIndex % 4];
+    float flicker = 0.6f + 0.4f * tf.intensity * (0.5f + 0.5f * sin(time * tf.rate + tf.phase));
+    float flicker2 = 0.5f + 0.5f * sin(time * tf.rate * 1.7f + tf.phase + 1.0f);
+
+    // Torch bracket (metal)
+    glColor3f(0.25f, 0.22f, 0.20f);
+    drawBox(x, y - 0.3f, z, 0.08f, 0.6f, 0.08f);
+
+    // Torch top holder
+    glColor3f(0.30f, 0.25f, 0.18f);
+    drawBox(x, y, z, 0.14f, 0.12f, 0.14f);
+
+    // Fire glow (animated)
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    // Inner flame (bright yellow-orange)
+    glColor4f(1.0f, 0.85f * flicker, 0.15f, 0.9f * flicker);
+    glPushMatrix();
+    glTranslatef(x, y + 0.18f + flicker2 * 0.05f, z);
+    glutSolidSphere(0.08f, 8, 8);
+    glPopMatrix();
+
+    // Outer flame (orange-red)
+    glColor4f(1.0f, 0.45f * flicker, 0.05f, 0.6f * flicker);
+    glPushMatrix();
+    glTranslatef(x, y + 0.22f + flicker2 * 0.08f, z);
+    glutSolidSphere(0.14f, 8, 8);
+    glPopMatrix();
+
+    // Flame halo
+    glColor4f(1.0f, 0.6f, 0.1f, 0.15f * flicker);
+    glPushMatrix();
+    glTranslatef(x, y + 0.15f, z);
+    glutSolidSphere(0.35f, 10, 10);
+    glPopMatrix();
+
+    glDisable(GL_BLEND);
+}
+
+void renderLavaCracks() {
+    float time = static_cast<float>(glutGet(GLUT_ELAPSED_TIME)) / 1000.0f;
+    float pulse = 0.5f + 0.5f * sin(time * 1.8f + lavaPulsePhase);
+    float pulse2 = 0.5f + 0.5f * sin(time * 2.5f + lavaPulsePhase + 2.0f);
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+
+    // Multiple lava cracks across the floor
+    float crackY = 0.02f;
+
+    // Crack 1 - diagonal
+    glColor4f(0.95f, 0.3f * pulse, 0.02f, 0.7f * pulse);
+    drawBox(-1.5f, crackY, -1.0f, 2.2f, 0.02f, 0.06f);
+    drawBox(-0.5f, crackY, -0.5f, 0.06f, 0.02f, 1.2f);
+
+    // Crack 2
+    glColor4f(1.0f, 0.35f * pulse2, 0.05f, 0.65f * pulse2);
+    drawBox(1.8f, crackY, 2.0f, 1.8f, 0.02f, 0.05f);
+    drawBox(2.5f, crackY, 1.5f, 0.05f, 0.02f, 1.5f);
+
+    // Crack 3
+    glColor4f(0.9f, 0.25f * pulse, 0.0f, 0.6f * pulse);
+    drawBox(-2.2f, crackY, 2.5f, 1.5f, 0.02f, 0.07f);
+    drawBox(-3.0f, crackY, 2.0f, 0.07f, 0.02f, 1.8f);
+
+    // Crack 4
+    glColor4f(1.0f, 0.4f * pulse2, 0.08f, 0.5f * pulse2);
+    drawBox(0.5f, crackY, -3.0f, 2.0f, 0.02f, 0.05f);
+    drawBox(1.3f, crackY, -2.5f, 0.05f, 0.02f, 1.3f);
+
+    // Glow spots at crack intersections
+    glColor4f(1.0f, 0.5f, 0.0f, 0.2f * pulse);
+    drawBox(-0.5f, crackY + 0.01f, -0.5f, 0.3f, 0.01f, 0.3f);
+    drawBox(2.5f, crackY + 0.01f, 1.5f, 0.25f, 0.01f, 0.25f);
+    drawBox(-3.0f, crackY + 0.01f, 2.0f, 0.2f, 0.01f, 0.2f);
+
+    glDisable(GL_BLEND);
+}
+
+void renderWallChains() {
+    float halfSize = worldHalfSize();
+    float wallZ = halfSize - WALL_THICKNESS * 0.5f - 0.05f;
+    float time = static_cast<float>(glutGet(GLUT_ELAPSED_TIME)) / 1000.0f;
+
+    // Two chain sets on the far (back) wall
+    float chainPositions[2] = {-2.0f, 2.0f};
+
+    for (int c = 0; c < 2; ++c) {
+        float cx = chainPositions[c];
+        float sway = sin(time * 0.8f + c * 1.5f) * 0.03f;
+
+        // Mounting ring
+        glColor3f(0.35f, 0.33f, 0.30f);
+        glPushMatrix();
+        glTranslatef(cx, 2.8f, wallZ);
+        glutSolidTorus(0.03f, 0.10f, 8, 16);
+        glPopMatrix();
+
+        // Chain links (hanging down)
+        for (int i = 0; i < 6; ++i) {
+            float linkY = 2.5f - i * 0.22f;
+            float linkSway = sway * (i + 1) * 0.5f;
+            glColor3f(0.32f - i * 0.02f, 0.30f - i * 0.02f, 0.28f - i * 0.01f);
+
+            glPushMatrix();
+            glTranslatef(cx + linkSway, linkY, wallZ);
+            if (i % 2 == 0) {
+                glRotatef(90.0f, 0.0f, 1.0f, 0.0f);
+            }
+            glutSolidTorus(0.015f, 0.04f, 6, 12);
+            glPopMatrix();
+        }
+
+        // Hanging ring at bottom
+        glColor3f(0.28f, 0.26f, 0.24f);
+        glPushMatrix();
+        glTranslatef(cx + sway * 3.5f, 1.1f, wallZ);
+        glutSolidTorus(0.025f, 0.08f, 8, 16);
+        glPopMatrix();
+    }
+}
+
+void renderCornerPillars() {
+    float halfSize = worldHalfSize();
+    float pillarSize = 0.35f;
+    float pillarHeight = 3.8f;
+
+    // Four corner positions near the entrance wall (back wall Z+)
+    float positions[4][2] = {
+        {-halfSize + 0.5f, halfSize - 0.5f},
+        { halfSize - 0.5f, halfSize - 0.5f},
+        {-halfSize + 0.5f, -halfSize + 0.8f},
+        { halfSize - 0.5f, -halfSize + 0.8f}
+    };
+
+    for (int i = 0; i < 4; ++i) {
+        float px = positions[i][0];
+        float pz = positions[i][1];
+
+        // Stone pillar body
+        glColor3f(0.38f, 0.36f, 0.33f);
+        drawBox(px, pillarHeight * 0.5f, pz, pillarSize, pillarHeight, pillarSize);
+
+        // Base
+        glColor3f(0.32f, 0.30f, 0.28f);
+        drawBox(px, 0.15f, pz, pillarSize + 0.12f, 0.30f, pillarSize + 0.12f);
+
+        // Carved cap
+        glColor3f(0.42f, 0.40f, 0.36f);
+        drawBox(px, pillarHeight + 0.08f, pz, pillarSize + 0.10f, 0.16f, pillarSize + 0.10f);
+
+        // Cap detail
+        glColor3f(0.35f, 0.32f, 0.28f);
+        drawBox(px, pillarHeight + 0.20f, pz, pillarSize - 0.05f, 0.08f, pillarSize - 0.05f);
+    }
+}
+
+void renderSkullOrnaments() {
+    float halfSize = worldHalfSize();
+    float time = static_cast<float>(glutGet(GLUT_ELAPSED_TIME)) / 1000.0f;
+
+    // Skulls on left and right walls
+    struct SkullPos { float x; float y; float z; float rotY; };
+    SkullPos skulls[4] = {
+        {-halfSize + WALL_THICKNESS * 0.5f + 0.12f, 2.2f, -1.5f, 90.0f},
+        {-halfSize + WALL_THICKNESS * 0.5f + 0.12f, 2.2f,  1.5f, 90.0f},
+        { halfSize - WALL_THICKNESS * 0.5f - 0.12f, 2.2f, -1.5f, -90.0f},
+        { halfSize - WALL_THICKNESS * 0.5f - 0.12f, 2.2f,  1.5f, -90.0f}
+    };
+
+    for (int i = 0; i < 4; ++i) {
+        glPushMatrix();
+        glTranslatef(skulls[i].x, skulls[i].y, skulls[i].z);
+        glRotatef(skulls[i].rotY, 0.0f, 1.0f, 0.0f);
+
+        // Skull cranium
+        glColor3f(0.85f, 0.82f, 0.72f);
+        glPushMatrix();
+        glScalef(1.0f, 1.15f, 0.9f);
+        glutSolidSphere(0.14f, 12, 12);
+        glPopMatrix();
+
+        // Eye sockets
+        float eyeGlow = 0.3f + 0.7f * (0.5f + 0.5f * sin(time * 2.0f + i * 1.5f));
+        glColor3f(0.8f * eyeGlow, 0.15f * eyeGlow, 0.0f);
+        drawBox(-0.05f, 0.02f, 0.11f, 0.04f, 0.04f, 0.03f);
+        drawBox( 0.05f, 0.02f, 0.11f, 0.04f, 0.04f, 0.03f);
+
+        // Nose
+        glColor3f(0.25f, 0.22f, 0.18f);
+        drawBox(0.0f, -0.03f, 0.12f, 0.025f, 0.03f, 0.02f);
+
+        // Jaw
+        glColor3f(0.80f, 0.77f, 0.68f);
+        drawBox(0.0f, -0.10f, 0.06f, 0.10f, 0.04f, 0.08f);
+
+        // Mounting plate
+        glColor3f(0.30f, 0.28f, 0.25f);
+        drawBox(0.0f, 0.0f, -0.06f, 0.18f, 0.22f, 0.03f);
+
+        glPopMatrix();
+    }
+}
+
+void renderStalactites() {
+    float halfSize = worldHalfSize();
+    float ceilingY = 4.0f;
+
+    struct StalactiteInfo { float x; float z; float length; float width; };
+    StalactiteInfo stalactites[] = {
+        {-3.0f,  2.5f, 0.8f, 0.10f},
+        {-1.5f, -3.0f, 1.2f, 0.12f},
+        { 0.5f,  1.8f, 0.6f, 0.08f},
+        { 2.5f, -1.0f, 1.0f, 0.11f},
+        {-2.0f, -0.5f, 0.5f, 0.07f},
+        { 3.2f,  3.0f, 0.7f, 0.09f},
+        { 1.0f, -2.5f, 0.9f, 0.10f},
+        {-3.5f,  0.5f, 0.55f, 0.08f},
+        { 0.0f,  3.5f, 0.65f, 0.09f},
+        { 2.0f,  2.0f, 0.45f, 0.07f}
+    };
+    int numStalactites = 10;
+
+    for (int i = 0; i < numStalactites; ++i) {
+        float sx = stalactites[i].x;
+        float sz = stalactites[i].z;
+        float len = stalactites[i].length;
+        float w = stalactites[i].width;
+
+        if (fabs(sx) > halfSize - 0.5f || fabs(sz) > halfSize - 0.5f) continue;
+
+        // Main body (cone shape approximated with tapered boxes)
+        glColor3f(0.35f, 0.33f, 0.30f);
+        drawBox(sx, ceilingY - len * 0.25f, sz, w * 1.5f, len * 0.5f, w * 1.5f);
+
+        glColor3f(0.30f, 0.28f, 0.26f);
+        drawBox(sx, ceilingY - len * 0.55f, sz, w * 1.0f, len * 0.3f, w * 1.0f);
+
+        // Tip
+        glColor3f(0.25f, 0.24f, 0.22f);
+        drawBox(sx, ceilingY - len * 0.8f, sz, w * 0.5f, len * 0.2f, w * 0.5f);
+
+        // Drip effect (tiny sphere at tip, subtle)
+        float time = static_cast<float>(glutGet(GLUT_ELAPSED_TIME)) / 1000.0f;
+        float dripPhase = fmod(time * 0.3f + i * 1.1f, 3.0f);
+        if (dripPhase < 0.5f) {
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glColor4f(0.4f, 0.5f, 0.6f, 0.5f * (1.0f - dripPhase * 2.0f));
+            glPushMatrix();
+            glTranslatef(sx, ceilingY - len - dripPhase * 0.3f, sz);
+            glutSolidSphere(0.02f, 6, 6);
+            glPopMatrix();
+            glDisable(GL_BLEND);
+        }
+    }
+}
+
+// =============================================
+// BONUS CLOCK RENDERING
+// =============================================
+
+void renderBonusClock() {
+    if (!bonusClockActive) return;
+
+    float time   = static_cast<float>(glutGet(GLUT_ELAPSED_TIME)) / 1000.0f;
+    // Bob up/down gently – no Y-axis spin so face stays visible
+    float hover  = 0.48f + 0.10f * sin(time * 2.2f);
+    // Slight tilt toward player (face-forward) – tiny rock side to side
+    float rock   = 4.0f * sin(time * 1.6f);
+
+    glPushMatrix();
+    glTranslatef(bonusClockX, hover, bonusClockZ);
+    // Make clock face the player (rotate around Y so face points +Z)
+    glRotatef(90.0f, 0.0f, 1.0f, 0.0f);   // face toward +X world = toward cam roughly
+    glRotatef(rock,  1.0f, 0.0f, 0.0f);   // gentle rocking tilt
+
+    // ── SIZES (match reference: thick green ring → gold body → white face) ──
+    const float R_GREEN  = 0.310f;  // green outer ring radius
+    const float R_GOLD   = 0.265f;  // gold body radius
+    const float R_WHITE  = 0.210f;  // white face radius
+    const float DEPTH    = 0.22f;   // disc thickness scale along Z
+
+    // ── PULSING GREEN OUTER GLOW ─────────────────────────────────────────────
+    float glow = 0.5f + 0.5f * sin(time * 4.0f);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    glColor4f(0.05f, 0.85f, 0.15f, 0.10f + 0.08f * glow);
+    glPushMatrix(); glScalef(1.0f, 1.0f, DEPTH * 0.6f);
+    glutSolidSphere(R_GREEN + 0.06f, 20, 20);
+    glPopMatrix();
+    glDisable(GL_BLEND);
+
+    // ── GREEN OUTER RING ─────────────────────────────────────────────────────
+    // Solid dark-green ring (the thick border seen in the image)
+    glColor3f(0.10f, 0.55f, 0.12f);
+    glPushMatrix();
+    glScalef(1.0f, 1.0f, DEPTH);
+    glutSolidSphere(R_GREEN, 28, 28);
+    glPopMatrix();
+
+    // Slightly lighter green highlight on top-left (lighting feel)
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glColor4f(0.25f, 0.80f, 0.28f, 0.35f);
+    glPushMatrix();
+    glTranslatef(-0.06f, 0.08f, R_GREEN * DEPTH * 0.55f);
+    glScalef(0.55f, 0.45f, 0.08f);
+    glutSolidSphere(R_GREEN, 16, 16);
+    glPopMatrix();
+    glDisable(GL_BLEND);
+
+    // ── GOLD / YELLOW BODY DISC ───────────────────────────────────────────────
+    glColor3f(0.92f, 0.78f, 0.08f);   // bright gold – matches image
+    glPushMatrix();
+    glScalef(1.0f, 1.0f, DEPTH);
+    glutSolidSphere(R_GOLD, 26, 26);
+    glPopMatrix();
+
+    // Shadow rim between green and gold (darker gold band at edge)
+    glColor3f(0.62f, 0.50f, 0.04f);
+    glPushMatrix();
+    glScalef(1.0f, 1.0f, DEPTH * 0.85f);
+    glutSolidSphere(R_GOLD + 0.010f, 26, 26);
+    glPopMatrix();
+
+    // ── WHITE / CREAM CLOCK FACE ─────────────────────────────────────────────
+    glColor3f(0.97f, 0.96f, 0.90f);
+    glPushMatrix();
+    glScalef(1.0f, 1.0f, DEPTH * 0.60f);
+    glutSolidSphere(R_WHITE, 26, 26);
+    glPopMatrix();
+
+    // Inner shadow ring on face edge (gives depth)
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glColor4f(0.55f, 0.50f, 0.30f, 0.22f);
+    glPushMatrix();
+    glScalef(1.0f, 1.0f, DEPTH * 0.38f);
+    glutSolidSphere(R_WHITE + 0.005f, 24, 24);
+    glPopMatrix();
+    glDisable(GL_BLEND);
+
+    // ── HOUR TICK MARKS (4 thick marks at 12/3/6/9, 8 thin for others) ───────
+    float faceZ = R_WHITE * DEPTH * 0.62f + 0.004f;
+    const float PI2 = 6.28318f;
+    for (int i = 0; i < 12; ++i) {
+        float ang  = (float)i / 12.0f * PI2;
+        float r    = R_WHITE * 0.84f;
+        float mx   = sin(ang) * r;
+        float my   = cos(ang) * r;
+        bool major = (i % 3 == 0);
+        glColor3f(0.12f, 0.10f, 0.10f);
+        glPushMatrix();
+        glTranslatef(mx, my, faceZ);
+        glRotatef(-(float)i / 12.0f * 360.0f, 0.0f, 0.0f, 1.0f);
+        float tw = major ? 0.022f : 0.011f;
+        float th = major ? 0.042f : 0.025f;
+        drawBox(0.0f, 0.0f, 0.0f, tw, th, 0.006f);
+        glPopMatrix();
+    }
+
+    // ── MINUTE HAND — shows whole minutes remaining (short & chunky) ──────────
+    // Each full minute = 360 deg; starts at 12, sweeps clockwise as time elapses
+    float totalMins  = levelTimeRemaining / 60.0f;          // e.g. 1.5 min remaining
+    float minuteAng  = fmod(totalMins, 1.0f) * 360.0f;     // position within current minute
+    glColor3f(0.08f, 0.07f, 0.08f);
+    glPushMatrix();
+    glTranslatef(0.0f, 0.0f, faceZ + 0.006f);
+    glRotatef(-minuteAng, 0.0f, 0.0f, 1.0f);
+    drawBox(0.0f,  0.028f, 0.0f, 0.024f, 0.010f, 0.007f);
+    drawBox(0.0f,  0.068f, 0.0f, 0.020f, 0.062f, 0.007f);
+    drawBox(0.0f,  0.108f, 0.0f, 0.013f, 0.018f, 0.006f);
+    glPopMatrix();
+
+    // ── SECOND HAND (long, slender, red) — sweeps once per 60 s ──────────────
+    // Maps seconds within the current minute: 0s→12 o'clock, 15s→3, 30s→6, 45s→9
+    float curSecs   = fmod(levelTimeRemaining, 60.0f);      // 0..60
+    float secondAng = (curSecs / 60.0f) * 360.0f;          // clockwise from 12
+    glColor3f(0.90f, 0.10f, 0.10f);   // red second hand
+    glPushMatrix();
+    glTranslatef(0.0f, 0.0f, faceZ + 0.011f);
+    glRotatef(-secondAng, 0.0f, 0.0f, 1.0f);
+    // Tail (short bit behind centre)
+    drawBox(0.0f, -0.030f, 0.0f, 0.007f, 0.028f, 0.004f);
+    // Main arm
+    drawBox(0.0f,  0.068f, 0.0f, 0.007f, 0.110f, 0.004f);
+    // Tip
+    drawBox(0.0f,  0.150f, 0.0f, 0.005f, 0.020f, 0.004f);
+    glPopMatrix();
+
+    // ── CENTER BOSS (gold dot over both hands) ────────────────────────────────
+    glColor3f(0.85f, 0.70f, 0.10f);
+    glPushMatrix();
+    glTranslatef(0.0f, 0.0f, faceZ + 0.016f);
+    glutSolidSphere(0.020f, 10, 10);
+    glPopMatrix();
+
+    // ── CROWN / STEM on top of clock ─────────────────────────────────────────
+    glColor3f(0.82f, 0.70f, 0.10f);
+    drawBox(0.0f, R_GREEN * 1.05f, 0.0f, 0.038f, 0.055f, 0.038f);
+    glColor3f(0.65f, 0.52f, 0.06f);
+    drawBox(0.0f, R_GREEN * 1.05f + 0.030f, 0.0f, 0.050f, 0.018f, 0.050f);
+
+    glPopMatrix();
 }
 
 void renderKeyModel(float scale) {
@@ -715,19 +1223,24 @@ void renderGroundPickups() {
 
     float spin = static_cast<float>(glutGet(GLUT_ELAPSED_TIME)) * 0.12f;
 
+    // Gun pickup instead of sword
     if (!weaponClaimed) {
         glPushMatrix();
         glTranslatef(weaponPickupPos.x, 0.48f, weaponPickupPos.z);
         glRotatef(spin, 0.0f, 1.0f, 0.0f);
 
-        glColor3f(0.26f, 0.18f, 0.12f);
-        drawBox(0.0f, -0.02f, 0.0f, 0.13f, 0.52f, 0.13f);
-        glColor3f(0.72f, 0.72f, 0.74f);
-        drawBox(0.0f, 0.28f, 0.0f, 0.36f, 0.08f, 0.10f);
-        glColor3f(0.84f, 0.86f, 0.92f);
-        drawBox(0.0f, 0.62f, 0.0f, 0.08f, 0.78f, 0.10f);
-        glColor3f(0.95f, 0.96f, 0.99f);
-        drawBox(0.0f, 1.00f, 0.0f, 0.05f, 0.22f, 0.08f);
+        // Gun body
+        glColor3f(0.18f, 0.18f, 0.20f);
+        drawBox(0.0f, 0.0f, 0.0f, 0.12f, 0.14f, 0.50f);
+        // Gun barrel
+        glColor3f(0.25f, 0.25f, 0.28f);
+        drawBox(0.0f, 0.04f, 0.35f, 0.06f, 0.06f, 0.30f);
+        // Gun grip
+        glColor3f(0.30f, 0.20f, 0.10f);
+        drawBox(0.0f, -0.14f, -0.05f, 0.10f, 0.20f, 0.12f);
+        // Gun trigger guard
+        glColor3f(0.22f, 0.22f, 0.24f);
+        drawBox(0.0f, -0.06f, 0.08f, 0.04f, 0.06f, 0.10f);
 
         glPopMatrix();
     }
@@ -745,52 +1258,162 @@ void renderGroundPickups() {
     }
 }
 
-void renderGhostBoss() {
-    if (!isGroundLevel() || !ghostAlive) {
-        return;
-    }
+void renderOneWarrior(int gi) {
+    float timeSec    = static_cast<float>(glutGet(GLUT_ELAPSED_TIME)) / 1000.0f;
+    float hurtFlash  = ghostHitFlashTimer[gi] > 0.0f ? (ghostHitFlashTimer[gi] / 0.25f) : 0.0f;
+    float healthRatio = (float)ghostHealth[gi] / (float)GHOST_MAX_HEALTH;
 
-    float time = static_cast<float>(glutGet(GLUT_ELAPSED_TIME));
-    float hover = 1.08f + sin(time * 0.0045f) * 0.20f;
-    float pulse = 0.75f + 0.25f * (sin(time * 0.0075f) * 0.5f + 0.5f);
-    float hurtFlash = ghostHitFlashTimer > 0.0f ? (ghostHitFlashTimer / 0.25f) : 0.0f;
-    float shake = hurtFlash * 0.10f * sin(time * 0.09f);
+    // Walking animation
+    float walkCycle = timeSec * 3.8f + gi * 0.8f;  // offset so they don't sync
+    float legSwing  = 22.0f * sin(walkCycle);
+    float armSwing  = 18.0f * sin(walkCycle);
+    float bodyBob   = 0.025f * fabs(sin(walkCycle));
+    float headSway  = 2.5f  * sin(walkCycle * 0.5f);
 
-    glPushMatrix();
-    glTranslatef(ghostX + shake, hover, ghostZ - shake * 0.4f);
+    // Armor colour: dark steel, flashes red when hit
+    float armorR = hurtFlash > 0.3f ? 0.85f : 0.18f;
+    float armorG = hurtFlash > 0.3f ? 0.08f : 0.18f;
+    float armorB = hurtFlash > 0.3f ? 0.06f : 0.20f;
 
+    // Turn to face the player
+    float dxP = camX - ghostX[gi];
+    float dzP = camZ - ghostZ[gi];
+    float faceYaw = atan2(dxP, dzP) * 57.29578f;
+
+    // Ground shadow
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-    glColor4f(0.70f + 0.30f * hurtFlash, 0.84f - 0.35f * hurtFlash, 0.98f - 0.45f * hurtFlash, 0.85f);
-    glutSolidSphere(0.55f, 20, 20);
-
+    glColor4f(0.0f, 0.0f, 0.0f, 0.32f);
     glPushMatrix();
-    glTranslatef(0.0f, -0.46f, 0.0f);
-    glScalef(0.95f, 1.35f, 0.95f);
-    glColor4f(0.64f + 0.22f * hurtFlash, 0.78f - 0.20f * hurtFlash, 0.95f - 0.25f * hurtFlash, 0.72f);
-    glutSolidSphere(0.52f, 20, 20);
+    glTranslatef(ghostX[gi], 0.01f, ghostZ[gi]);
+    glScalef(1.0f, 0.02f, 0.75f);
+    glutSolidSphere(0.40f, 16, 6);
     glPopMatrix();
-
-    glPushMatrix();
-    glScalef(1.35f, 1.20f, 1.35f);
-    glColor4f(0.56f, 0.70f, 0.95f, 0.18f + pulse * 0.12f);
-    glutSolidSphere(0.58f, 20, 20);
-    glPopMatrix();
-
-    glColor3f(0.20f, 0.10f, 0.30f);
-    drawBox(-0.16f, 0.08f, 0.46f, 0.10f, 0.10f, 0.04f);
-    drawBox(0.16f, 0.08f, 0.46f, 0.10f, 0.10f, 0.04f);
-
-    glColor3f(0.90f, 0.12f, 0.20f);
-    drawBox(0.0f, -0.12f, 0.47f, 0.18f, 0.07f, 0.04f);
-
     glDisable(GL_BLEND);
 
-    glPopMatrix();
+    glPushMatrix();
+    glTranslatef(ghostX[gi], bodyBob, ghostZ[gi]);
+    glRotatef(faceYaw, 0.0f, 1.0f, 0.0f);
+
+    // LEGS
+    for (int side = -1; side <= 1; side += 2) {
+        float sx = side * 0.17f;
+        float swing = side * legSwing;
+        glPushMatrix();
+        glTranslatef(sx, 0.52f, 0.0f);
+        glRotatef(swing, 1.0f, 0.0f, 0.0f);
+        glTranslatef(0.0f, -0.52f, 0.0f);
+        glColor3f(0.15f, 0.14f, 0.15f);
+        drawBox(0.0f, 0.58f, 0.0f, 0.16f, 0.42f, 0.15f);
+        glColor3f(armorR*0.6f+0.10f, armorG*0.6f+0.10f, armorB*0.6f+0.12f);
+        drawBox(0.0f, 0.35f, 0.06f, 0.14f, 0.10f, 0.10f);
+        glColor3f(0.15f, 0.14f, 0.15f);
+        drawBox(0.0f, 0.18f, 0.0f, 0.13f, 0.34f, 0.13f);
+        glColor3f(0.08f, 0.07f, 0.07f);
+        drawBox(0.0f, 0.04f, 0.04f, 0.15f, 0.10f, 0.20f);
+        glPopMatrix();
+    }
+
+    // TORSO
+    glColor3f(armorR, armorG, armorB);
+    drawBox(0.0f, 1.12f, 0.0f, 0.46f, 0.50f, 0.24f);
+    glColor3f(armorR*0.6f+0.10f, armorG*0.6f+0.10f, armorB*0.6f+0.12f);
+    drawBox(0.0f, 1.12f, 0.12f, 0.06f, 0.44f, 0.04f);
+    glColor3f(0.20f, 0.18f, 0.18f);
+    drawBox(0.0f, 0.84f, 0.0f, 0.36f, 0.18f, 0.20f);
+    glColor3f(0.70f, 0.55f, 0.08f);
+    drawBox(0.0f, 0.83f, 0.10f, 0.08f, 0.06f, 0.04f);
+
+    // SHOULDER PAULDRONS
+    for (int side = -1; side <= 1; side += 2) {
+        glColor3f(armorR+0.04f, armorG+0.02f, armorB+0.02f);
+        drawBox(side*0.32f, 1.36f, 0.0f, 0.12f, 0.12f, 0.26f);
+        glColor3f(armorR*0.55f+0.08f, armorG*0.55f+0.08f, armorB*0.55f+0.10f);
+        drawBox(side*0.36f, 1.36f, 0.0f, 0.05f, 0.08f, 0.22f);
+    }
+
+    // ARMS
+    for (int side = -1; side <= 1; side += 2) {
+        glPushMatrix();
+        glTranslatef(side*0.30f, 1.32f, 0.0f);
+        glRotatef(-side*armSwing, 1.0f, 0.0f, 0.0f);
+        glColor3f(armorR, armorG, armorB);
+        drawBox(0.0f, -0.20f, 0.0f, 0.13f, 0.30f, 0.13f);
+        glColor3f(0.12f, 0.11f, 0.12f);
+        drawBox(0.0f, -0.37f, 0.0f, 0.11f, 0.08f, 0.11f);
+        glColor3f(0.18f, 0.17f, 0.18f);
+        drawBox(0.0f, -0.56f, 0.0f, 0.10f, 0.24f, 0.10f);
+        glColor3f(0.10f, 0.09f, 0.10f);
+        drawBox(0.0f, -0.74f, 0.02f, 0.12f, 0.12f, 0.14f);
+        if (side == 1) {
+            glColor3f(0.32f, 0.16f, 0.06f);
+            drawBox(0.0f, -0.92f, 0.0f, 0.06f, 0.22f, 0.06f);
+            glColor3f(0.70f, 0.55f, 0.08f);
+            drawBox(0.0f, -0.80f, 0.0f, 0.24f, 0.04f, 0.04f);
+            glColor3f(0.75f, 0.78f, 0.84f);
+            drawBox(0.0f, -1.28f, 0.0f, 0.05f, 0.80f, 0.04f);
+        }
+        glPopMatrix();
+    }
+
+    // NECK
+    glColor3f(0.58f, 0.42f, 0.34f);
+    drawBox(0.0f, 1.52f, 0.0f, 0.12f, 0.12f, 0.12f);
+
+    // HEAD + HELMET
+    glPushMatrix();
+    glTranslatef(0.0f, 1.66f, 0.0f);
+    glRotatef(headSway, 0.0f, 1.0f, 0.0f);
+    glColor3f(0.70f, 0.50f, 0.38f);
+    drawBox(0.0f, -0.02f, 0.08f, 0.22f, 0.18f, 0.10f);
+    float eyeR = (healthRatio < 0.4f || hurtFlash > 0.3f) ? 1.0f : 0.85f;
+    float eyeG = (healthRatio < 0.4f || hurtFlash > 0.3f) ? 0.05f : 0.65f;
+    float eyeB = (healthRatio < 0.4f || hurtFlash > 0.3f) ? 0.02f : 0.10f;
+    for (int side = -1; side <= 1; side += 2) {
+        float ex = side * 0.07f;
+        glColor3f(0.05f, 0.04f, 0.04f);
+        drawBox(ex, 0.02f, 0.145f, 0.06f, 0.04f, 0.03f);
+        glColor3f(eyeR, eyeG, eyeB);
+        drawBox(ex, 0.02f, 0.165f, 0.035f, 0.025f, 0.018f);
+    }
+    glColor3f(armorR+0.02f, armorG+0.02f, armorB+0.02f);
+    glPushMatrix(); glScalef(1.0f, 1.05f, 0.95f); glutSolidSphere(0.198f, 20, 16); glPopMatrix();
+    glColor3f(armorR*0.5f+0.14f, armorG*0.5f+0.12f, armorB*0.5f+0.14f);
+    drawBox(0.0f, 0.08f, 0.165f, 0.30f, 0.05f, 0.05f);
+    for (int side = -1; side <= 1; side += 2) {
+        glColor3f(armorR, armorG, armorB);
+        drawBox(side*0.168f, -0.04f, 0.08f, 0.06f, 0.16f, 0.14f);
+    }
+    glColor3f(0.80f, 0.06f, 0.06f);
+    drawBox(0.0f, 0.25f, -0.02f, 0.038f, 0.10f, 0.12f);
+    glPopMatrix();  // end head
+
+    // HEALTH BAR
+    {
+        float barW = 0.60f, barH = 0.055f, barY = 2.08f;
+        glColor3f(0.28f, 0.04f, 0.04f);
+        drawBox(0.0f, barY, 0.0f, barW, barH, 0.02f);
+        float fillW = barW * healthRatio;
+        glColor3f(0.12f + (1.0f-healthRatio)*0.88f, healthRatio*0.82f, 0.04f);
+        drawBox(-barW*0.5f + fillW*0.5f, barY, 0.01f, fillW, barH-0.01f, 0.02f);
+    }
+
+    glPopMatrix();  // end root
 }
 
-void renderHeldSword() {
+void renderGhostBoss() {
+    if (!isGroundLevel()) return;
+    for (int gi = 0; gi < NUM_WARRIORS; ++gi) {
+        if (ghostAlive[gi]) renderOneWarrior(gi);
+    }
+}
+
+
+// =============================================
+// HELD GUN RENDERING (replaces sword for Level 4)
+// =============================================
+
+void renderHeldGun() {
     if (!(gameState == STATE_PLAYING && isGroundLevel() && weaponClaimed)) {
         return;
     }
@@ -806,35 +1429,58 @@ void renderHeldSword() {
     float upY = cos(pitch);
     float upZ = sin(pitch) * cos(yaw);
 
-    float swing = swordSwingTimer > 0.0f ? (swordSwingTimer / 0.22f) : 0.0f;
-    float swingAngle = sin((1.0f - swing) * 3.1415926f) * 36.0f;
+    float recoil = gunRecoilTimer > 0.0f ? (gunRecoilTimer / 0.15f) : 0.0f;
+    float recoilKick = sin(recoil * 3.14159f) * 0.06f;
 
-    float baseX = camX + forwardX * 0.72f + rightX * 0.30f + upX * -0.20f;
-    float baseY = camY + forwardY * 0.72f + upY * -0.20f;
-    float baseZ = camZ + forwardZ * 0.72f + rightZ * 0.30f + upZ * -0.20f;
+    float baseX = camX + forwardX * 0.55f + rightX * 0.28f + upX * -0.22f;
+    float baseY = camY + forwardY * 0.55f + upY * -0.22f;
+    float baseZ = camZ + forwardZ * 0.55f + rightZ * 0.28f + upZ * -0.22f;
+
+    // Pull back on recoil
+    baseX -= forwardX * recoilKick;
+    baseY -= forwardY * recoilKick;
+    baseZ -= forwardZ * recoilKick;
 
     glPushMatrix();
     glTranslatef(baseX, baseY, baseZ);
-    glRotatef((-yaw * 57.29578f) + 28.0f, 0.0f, 1.0f, 0.0f);
-    glRotatef(pitch * 57.29578f - 15.0f, 1.0f, 0.0f, 0.0f);
-    glRotatef(-swingAngle, 0.0f, 0.0f, 1.0f);
+    glRotatef((-yaw * 57.29578f) + 10.0f, 0.0f, 1.0f, 0.0f);
+    glRotatef(pitch * 57.29578f - 8.0f, 1.0f, 0.0f, 0.0f);
 
-    glColor3f(0.30f, 0.20f, 0.12f);
-    drawBox(0.0f, -0.18f, 0.0f, 0.08f, 0.42f, 0.08f);
-    glColor3f(0.75f, 0.75f, 0.78f);
-    drawBox(0.0f, 0.03f, 0.0f, 0.26f, 0.06f, 0.10f);
-    glColor3f(0.86f, 0.88f, 0.94f);
-    drawBox(0.0f, 0.52f, 0.0f, 0.06f, 0.95f, 0.11f);
-    glColor3f(0.96f, 0.97f, 0.99f);
-    drawBox(0.0f, 0.95f, 0.0f, 0.04f, 0.24f, 0.08f);
+    // Gun body (main receiver)
+    glColor3f(0.15f, 0.15f, 0.17f);
+    drawBox(0.0f, 0.0f, 0.0f, 0.06f, 0.06f, 0.28f);
 
-    if (swordSwingTimer > 0.0f) {
-        float swingRatio = swordSwingTimer / 0.22f;
-        if (swingRatio > 1.0f) swingRatio = 1.0f;
+    // Gun barrel
+    glColor3f(0.20f, 0.20f, 0.22f);
+    drawBox(0.0f, 0.015f, 0.22f, 0.035f, 0.035f, 0.20f);
+
+    // Gun slide top
+    glColor3f(0.18f, 0.18f, 0.20f);
+    drawBox(0.0f, 0.04f, 0.02f, 0.055f, 0.025f, 0.22f);
+
+    // Grip
+    glColor3f(0.28f, 0.18f, 0.10f);
+    drawBox(0.0f, -0.08f, -0.06f, 0.05f, 0.12f, 0.06f);
+
+    // Trigger
+    glColor3f(0.12f, 0.12f, 0.14f);
+    drawBox(0.0f, -0.02f, 0.04f, 0.015f, 0.04f, 0.02f);
+
+    // Muzzle flash
+    if (muzzleFlashTimer > 0.0f) {
         glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glColor4f(0.80f, 0.95f, 1.0f, 0.22f * swingRatio);
-        drawBox(0.12f, 0.72f, 0.0f, 0.52f, 0.62f, 0.08f);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+        float flashIntensity = muzzleFlashTimer / 0.08f;
+        glColor4f(1.0f, 0.9f, 0.3f, 0.8f * flashIntensity);
+        glPushMatrix();
+        glTranslatef(0.0f, 0.015f, 0.35f);
+        glutSolidSphere(0.04f * flashIntensity, 8, 8);
+        glPopMatrix();
+        glColor4f(1.0f, 0.5f, 0.1f, 0.4f * flashIntensity);
+        glPushMatrix();
+        glTranslatef(0.0f, 0.015f, 0.38f);
+        glutSolidSphere(0.07f * flashIntensity, 8, 8);
+        glPopMatrix();
         glDisable(GL_BLEND);
     }
 
@@ -859,21 +1505,25 @@ void renderKeys() {
 void renderRoomLevel() {
     float halfSize = worldHalfSize();
 
-    glColor3f(0.42f, 0.45f, 0.50f);
+    // Dark stone floor
+    glColor3f(0.25f, 0.23f, 0.22f);
     drawBox(0.0f, -0.10f, 0.0f, halfSize * 2.0f, 0.20f, halfSize * 2.0f);
 
-    glColor3f(0.34f, 0.38f, 0.44f);
+    // Floor tiles pattern
+    glColor3f(0.22f, 0.20f, 0.19f);
     drawBox(0.0f, -0.06f, 0.0f, halfSize * 1.95f, 0.03f, halfSize * 1.95f);
 
-    glColor3f(0.10f, 0.12f, 0.17f);
+    // Dark ceiling
+    glColor3f(0.08f, 0.08f, 0.10f);
     drawBox(0.0f, 4.0f, 0.0f, halfSize * 2.0f, 0.20f, halfSize * 2.0f);
 
-    float wallR = 0.30f - 0.03f * static_cast<float>(currentLevel);
-    float wallG = 0.35f - 0.03f * static_cast<float>(currentLevel);
-    float wallB = 0.50f - 0.02f * static_cast<float>(currentLevel);
-    if (wallR < 0.20f) wallR = 0.20f;
-    if (wallG < 0.24f) wallG = 0.24f;
-    if (wallB < 0.40f) wallB = 0.40f;
+    // Dungeon walls - darker, more stone-like
+    float wallR = 0.22f - 0.02f * static_cast<float>(currentLevel);
+    float wallG = 0.20f - 0.02f * static_cast<float>(currentLevel);
+    float wallB = 0.25f - 0.01f * static_cast<float>(currentLevel);
+    if (wallR < 0.15f) wallR = 0.15f;
+    if (wallG < 0.14f) wallG = 0.14f;
+    if (wallB < 0.18f) wallB = 0.18f;
     glColor3f(wallR, wallG, wallB);
 
     drawBox(-halfSize + WALL_THICKNESS * 0.5f, 2.0f, 0.0f, WALL_THICKNESS, 4.0f, halfSize * 2.0f);
@@ -891,6 +1541,29 @@ void renderRoomLevel() {
     drawBox(0.0f, 3.5f, doorZ, doorWidth, 1.0f, WALL_THICKNESS);
 
     drawRoomLights();
+
+    // ---- ENVIRONMENT DECORATIONS ----
+
+    // 🔥 Torches at four corners
+    renderTorch(-halfSize + 0.6f, 2.5f, -halfSize + 0.6f, 0);
+    renderTorch( halfSize - 0.6f, 2.5f, -halfSize + 0.6f, 1);
+    renderTorch(-halfSize + 0.6f, 2.5f,  halfSize - 0.6f, 2);
+    renderTorch( halfSize - 0.6f, 2.5f,  halfSize - 0.6f, 3);
+
+    // 🌋 Lava cracks in the floor
+    renderLavaCracks();
+
+    // ⛓️ Wall chains on far wall
+    renderWallChains();
+
+    // 🪨 Stone corner pillars
+    renderCornerPillars();
+
+    // 💀 Skull ornaments on side walls
+    renderSkullOrnaments();
+
+    // 🏔️ Ceiling stalactites
+    renderStalactites();
 }
 
 void renderGroundLevel() {
@@ -972,23 +1645,32 @@ void drawHUD() {
 
     if (gameState == STATE_PLAYING) {
         if (isGroundLevel()) {
-            snprintf(line2, sizeof(line2), "Ghost HP: %d/%d   Sword: %s   Medkit: %s   Health: %d/%d", ghostHealth, GHOST_MAX_HEALTH, weaponClaimed ? "Claimed" : "Not Claimed", (!healthPickupClaimed ? "Not Claimed" : (medkitUsed ? "Used" : "Ready")), playerLives, MAX_LIVES);
+            // Count alive warriors
+            int aliveCount = 0;
+            for (int gi = 0; gi < NUM_WARRIORS; ++gi) if (ghostAlive[gi]) aliveCount++;
+            snprintf(line2, sizeof(line2), "Warriors Alive: %d   Gun: %s   Medkit: %s   Health: %d/%d",
+                aliveCount,
+                weaponClaimed ? "Claimed" : "Not Claimed",
+                (!healthPickupClaimed ? "Not Claimed" : (medkitUsed ? "Used" : "Ready")),
+                playerLives, MAX_LIVES);
         } else {
-            snprintf(line2, sizeof(line2), "Keys: %d / %d   Obstacles: %d   Health: %d/%d   Difficulty: %s", keysCollected, keysRequired(), obstacleCount(), playerLives, MAX_LIVES, levelNames[currentLevel]);
+            snprintf(line2, sizeof(line2), "Keys: %d/%d   Hits: %d/%d   Health: %d/%d   Difficulty: %s", keysCollected, keysRequired(), obstacleHitCount, MAX_OBSTACLE_HITS, playerLives, MAX_LIVES, levelNames[currentLevel]);
         }
         glColor3f(0.95f, 0.95f, 0.7f);
         drawText2D(15.0f, static_cast<float>(h - 52), line2);
 
         if (isGroundLevel()) {
+            int aliveCount = 0;
+            for (int gi = 0; gi < NUM_WARRIORS; ++gi) if (ghostAlive[gi]) aliveCount++;
             if (groundIntroActive) {
                 glColor3f(0.95f, 0.95f, 0.7f);
                 drawText2D(15.0f, static_cast<float>(h - 80), "Objective: Read all rules, then press ENTER to start this ground fight.");
             } else if (!weaponClaimed) {
                 glColor3f(1.0f, 0.95f, 0.2f);
-                drawText2D(15.0f, static_cast<float>(h - 80), "Objective: Claim the sword first (Press E near sword). Then left-click to attack ghost.");
-            } else if (ghostAlive) {
+                drawText2D(15.0f, static_cast<float>(h - 80), "Objective: Claim the gun first (Press E near gun). Then left-click to shoot.");
+            } else if (aliveCount > 0) {
                 glColor3f(1.0f, 0.78f, 0.35f);
-                drawText2D(15.0f, static_cast<float>(h - 80), "Objective: Fight the ghost with LEFT CLICK. Claim medkit and hold 4 to use it.");
+                drawText2D(15.0f, static_cast<float>(h - 80), "Objective: Shoot the ghost with LEFT CLICK. Claim medkit and hold 4 to use it.");
             } else if (!doorOpening) {
                 glColor3f(0.7f, 1.0f, 0.7f);
                 drawText2D(15.0f, static_cast<float>(h - 80), "Objective: Ghost defeated. Escape door is unlocking.");
@@ -1022,15 +1704,58 @@ void drawHUD() {
             drawText2D(static_cast<float>(w - 250), static_cast<float>(h - 118), "Hold 4 to use medkit");
         }
 
-        if (isGroundLevel() && !groundIntroActive && ghostAlive) {
-            float ghostRatio = static_cast<float>(ghostHealth) / static_cast<float>(GHOST_MAX_HEALTH);
-            if (ghostRatio < 0.0f) ghostRatio = 0.0f;
-            if (ghostRatio > 1.0f) ghostRatio = 1.0f;
-            float barW = 300.0f;
-            float barX = static_cast<float>(w) * 0.5f - barW * 0.5f;
-            drawHUDBar(barX, static_cast<float>(h - 55), barW, 16.0f, ghostRatio, 0.88f, 0.20f, 0.22f);
-            glColor3f(1.0f, 0.92f, 0.92f);
-            drawText2DCentered(static_cast<float>(w) * 0.5f, static_cast<float>(h - 74), "GHOST HEALTH");
+        // Ghost health HUD: compact bars for each warrior
+        if (isGroundLevel() && !groundIntroActive) {
+            int aliveCount2 = 0;
+            for (int gi = 0; gi < NUM_WARRIORS; ++gi) if (ghostAlive[gi]) aliveCount2++;
+            if (aliveCount2 > 0) {
+                float barW = 40.0f;
+                float startX = static_cast<float>(w) * 0.5f - (NUM_WARRIORS * (barW + 4)) * 0.5f;
+                for (int gi = 0; gi < NUM_WARRIORS; ++gi) {
+                    float ratio = (float)ghostHealth[gi] / (float)GHOST_MAX_HEALTH;
+                    if (ratio < 0.0f) ratio = 0.0f;
+                    drawHUDBar(startX + gi*(barW+4), static_cast<float>(h - 55), barW, 14.0f,
+                               ratio * (ghostAlive[gi] ? 1.0f : 0.0f), 0.88f, 0.20f, 0.22f);
+                }
+                glColor3f(1.0f, 0.92f, 0.92f);
+                drawText2DCentered(static_cast<float>(w)*0.5f, static_cast<float>(h - 73), "WARRIOR HEALTH");
+            }
+        }
+
+        // ---- Bonus Clock HUD (all levels) ----
+        {
+            if (bonusClockActive) {
+                float dist = distance2D(camX, camZ, bonusClockX, bonusClockZ);
+                char clockMsg[80];
+                snprintf(clockMsg, sizeof(clockMsg), ">> BONUS CLOCK nearby (%.1fm) - walk over it! <<", dist);
+                glColor3f(0.2f, 1.0f, 0.4f);
+                drawText2DCentered(static_cast<float>(w) * 0.5f, 40.0f, clockMsg);
+            } else {
+                char clockMsg[80];
+                snprintf(clockMsg, sizeof(clockMsg), "Next +8s clock in: %.1fs", bonusClockSpawnTimer);
+                glColor3f(0.55f, 0.8f, 0.55f);
+                drawText2DCentered(static_cast<float>(w) * 0.5f, 40.0f, clockMsg);
+            }
+        }
+
+        // "+8 SEC!" floating banner
+        if (bonusClockBannerTimer > 0.0f) {
+            float alpha = bonusClockBannerTimer / 1.5f;
+            float yOffset = (1.5f - bonusClockBannerTimer) * 40.0f;
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glColor4f(0.1f, 1.0f, 0.3f, alpha);
+            drawText2DCentered(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.35f + yOffset, "+8 SEC!");
+            glDisable(GL_BLEND);
+        }
+
+        // Crosshair for gun (ground level with weapon)
+        if (isGroundLevel() && weaponClaimed) {
+            glColor3f(1.0f, 0.3f, 0.3f);
+            float cx = static_cast<float>(w) * 0.5f;
+            float cy = static_cast<float>(h) * 0.5f;
+            drawFilledRect2D(cx - 8.0f, cy - 1.0f, 16.0f, 2.0f);
+            drawFilledRect2D(cx - 1.0f, cy - 8.0f, 2.0f, 16.0f);
         }
     }
 
@@ -1049,13 +1774,13 @@ void drawHUD() {
                 } else if (keysCollected < keysRequired()) {
                     glColor3f(1.0f, 0.3f, 0.3f);
                     drawText2DCentered(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.45f, "DOOR LOCKED");
-                    char msg[64]; 
+                    char msg[64];
                     snprintf(msg, sizeof(msg), "Need %d more key(s)!", keysRequired() - keysCollected);
                     drawText2DCentered(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.41f, msg);
                 } else {
                     glColor3f(1.0f, 0.8f, 0.2f);
                     drawText2DCentered(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.45f, "DOOR LOCKED (Keys Acquired)");
-                    
+
                     if (doorDist < 1.65f) {
                         drawText2DCentered(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.41f, "Press E to Insert Keys & Unlock");
                     } else {
@@ -1079,16 +1804,14 @@ void drawHUD() {
 
     if (damageCooldown > 0.0f && gameState == STATE_PLAYING) {
         // Red flashing effect for getting hurt
-        float alpha = (damageCooldown / 1.5f) * 0.5f; // Max 50% opacity
+        float alpha = (damageCooldown / 1.5f) * 0.5f;
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glColor4f(1.0f, 0.0f, 0.0f, alpha);
-        
-        // Semi-transparent red border/fill around screen 
-        drawFilledRect2D(0, 0, static_cast<float>(w), static_cast<float>(h)); 
-        
+
+        drawFilledRect2D(0, 0, static_cast<float>(w), static_cast<float>(h));
+
         glColor3f(1.0f, 1.0f, 1.0f);
-        // Add bold alert text
         drawText2DCentered(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.40f, "HEALTH COMPROMISED!");
         glDisable(GL_BLEND);
     }
@@ -1123,10 +1846,10 @@ void drawHUD() {
 
         y -= 55.0f;
         glColor3f(0.95f, 0.95f, 0.90f);
-        drawText2D(panelX + 28.0f, y, "1) Claim the sword first (Press E near the sword pickup)."); y -= 34.0f;
-        drawText2D(panelX + 28.0f, y, "2) Attack ghost only with LEFT MOUSE CLICK."); y -= 34.0f;
+        drawText2D(panelX + 28.0f, y, "1) Claim the gun first (Press E near the gun pickup)."); y -= 34.0f;
+        drawText2D(panelX + 28.0f, y, "2) Shoot ghost with LEFT MOUSE CLICK (aim at ghost)."); y -= 34.0f;
         drawText2D(panelX + 28.0f, y, "3) Claim medkit (Press E near medkit), then HOLD 4 to use it."); y -= 34.0f;
-        drawText2D(panelX + 28.0f, y, "4) Ghost contact damages you, so keep distance and strike smartly."); y -= 34.0f;
+        drawText2D(panelX + 28.0f, y, "4) Ghost contact damages you, keep distance and shoot!"); y -= 34.0f;
         drawText2D(panelX + 28.0f, y, "5) After ghost dies, door opens automatically."); y -= 34.0f;
         drawText2D(panelX + 28.0f, y, "6) Run down the long road and cross the door to complete game."); y -= 46.0f;
 
@@ -1157,10 +1880,10 @@ void drawRulesScreen() {
 
     glDisable(GL_DEPTH_TEST);
 
-    float panelX = static_cast<float>(w) * 0.18f;
-    float panelY = static_cast<float>(h) * 0.15f;
-    float panelW = static_cast<float>(w) * 0.64f;
-    float panelH = static_cast<float>(h) * 0.70f;
+    float panelX = static_cast<float>(w) * 0.12f;
+    float panelY = static_cast<float>(h) * 0.08f;
+    float panelW = static_cast<float>(w) * 0.76f;
+    float panelH = static_cast<float>(h) * 0.84f;
 
     glColor3f(0.12f, 0.05f, 0.05f);
     drawFilledRect2D(panelX, panelY, panelW, panelH);
@@ -1168,18 +1891,24 @@ void drawRulesScreen() {
     drawFilledRect2D(panelX + 4.0f, panelY + panelH - 6.0f, panelW - 8.0f, 2.5f);
 
     glColor3f(1.0f, 0.45f, 0.45f);
-    drawText2DCentered(static_cast<float>(w) * 0.5f, panelY + panelH - 48.0f, "GAME RULES - SURVIVAL PROTOCOL");
+    drawText2DCentered(static_cast<float>(w) * 0.5f, panelY + panelH - 42.0f, "GAME RULES - SURVIVAL PROTOCOL");
 
-    float y = panelY + panelH - 100.0f;
+    float y = panelY + panelH - 82.0f;
     glColor3f(0.95f, 0.95f, 0.88f);
-    drawText2D(panelX + 40.0f, y, "1) Each level has a STRICT 20-second timer!"); y -= 35.0f;
-    drawText2D(panelX + 40.0f, y, "2) Find and collect all keys before time runs out."); y -= 35.0f;
+    drawText2D(panelX + 30.0f, y, "1) Each level has a timer. Collect all keys before time runs out!"); y -= 30.0f;
+    drawText2D(panelX + 30.0f, y, "2) Find and collect all keys, then unlock the door."); y -= 30.0f;
     glColor3f(1.0f, 0.35f, 0.35f);
-    drawText2D(panelX + 40.0f, y, "3) DO NOT TOUCH OBSTACLES."); y -= 25.0f;
-    drawText2D(panelX + 60.0f, y, "Touching obstacles = Instant Health Lost!"); y -= 35.0f;
+    drawText2D(panelX + 30.0f, y, "3) DO NOT TOUCH OBSTACLES - they cost you health!"); y -= 22.0f;
+    drawText2D(panelX + 45.0f, y, "Walls move in Medium and Hard, but at manageable speed."); y -= 30.0f;
     glColor3f(0.95f, 0.95f, 0.88f);
-    drawText2D(panelX + 40.0f, y, "4) Press E to interact (Pick up keys, unlock doors)."); y -= 35.0f;
-    drawText2D(panelX + 40.0f, y, "5) Press SPACE to jump over gaps and obstacles."); y -= 45.0f;
+    drawText2D(panelX + 30.0f, y, "4) Press E to interact (Pick up keys, unlock doors)."); y -= 30.0f;
+    drawText2D(panelX + 30.0f, y, "5) Press SPACE to jump over gaps and obstacles."); y -= 30.0f;
+    glColor3f(0.3f, 1.0f, 0.5f);
+    drawText2D(panelX + 30.0f, y, "6) [Level 3+] Bonus clocks spawn! Walk over for +8 seconds."); y -= 30.0f;
+    glColor3f(0.95f, 0.95f, 0.88f);
+    drawText2D(panelX + 30.0f, y, "7) Level 4 (Ground): Pick up the GUN and SHOOT the ghost!"); y -= 30.0f;
+    drawText2D(panelX + 30.0f, y, "8) Dungeon rooms have torches, lava cracks, and skulls."); y -= 30.0f;
+    drawText2D(panelX + 30.0f, y, "9) Mouse to look around. WASD to move."); y -= 40.0f;
 
     glColor3f(0.45f, 1.0f, 0.45f);
     drawText2DCentered(static_cast<float>(w) * 0.5f, y, "PRESS ENTER TO START YOUR ESCAPE");
@@ -1231,16 +1960,16 @@ void drawMenuScreen() {
         glEnable(GL_TEXTURE_2D);
         glBindTexture(GL_TEXTURE_2D, startScreenTexture);
         glColor3f(1.0f, 1.0f, 1.0f);
-        
+
         glBegin(GL_QUADS);
         glTexCoord2f(0.0f, 0.0f); glVertex2f(0.0f, h);
         glTexCoord2f(1.0f, 0.0f); glVertex2f(w, h);
         glTexCoord2f(1.0f, 1.0f); glVertex2f(w, 0.0f);
         glTexCoord2f(0.0f, 1.0f); glVertex2f(0.0f, 0.0f);
         glEnd();
-        
+
         glDisable(GL_TEXTURE_2D);
-        
+
         // Add a dark semi-transparent overlay over the image so it looks slightly blurry/dim
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -1403,36 +2132,158 @@ void drawHighScoreScreen() {
 void drawNameEntryScreen() {
     int w = glutGet(GLUT_WINDOW_WIDTH);
     int h = glutGet(GLUT_WINDOW_HEIGHT);
+    float timeSec = static_cast<float>(glutGet(GLUT_ELAPSED_TIME)) / 1000.0f;
 
     glMatrixMode(GL_PROJECTION);
     glPushMatrix();
     glLoadIdentity();
     gluOrtho2D(0, w, 0, h);
-
     glMatrixMode(GL_MODELVIEW);
     glPushMatrix();
     glLoadIdentity();
-
     glDisable(GL_DEPTH_TEST);
 
-    glColor3f(0.45f, 1.0f, 0.55f);
-    drawText2DCentered(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.66f, "YOU ESCAPED!");
+    float fw = static_cast<float>(w);
+    float fh = static_cast<float>(h);
+    float cx = fw * 0.5f;
 
+    // ── DARK GRADIENT BACKGROUND ─────────────────────────────────────────────
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // Bottom: deep navy
+    glBegin(GL_QUADS);
+    glColor4f(0.02f, 0.04f, 0.12f, 1.0f);
+    glVertex2f(0, 0);
+    glVertex2f(fw, 0);
+    // Top: dark purple
+    glColor4f(0.08f, 0.02f, 0.20f, 1.0f);
+    glVertex2f(fw, fh);
+    glVertex2f(0, fh);
+    glEnd();
+    glDisable(GL_BLEND);
+
+    // ── DECORATIVE STAR BURST (radiating lines) ───────────────────────────────
+    float spinAngle = fmod(timeSec * 18.0f, 360.0f);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glLineWidth(1.5f);
+    glBegin(GL_LINES);
+    for (int i = 0; i < 24; ++i) {
+        float ang  = (spinAngle + i * 15.0f) * 3.14159f / 180.0f;
+        float alpha = 0.08f + 0.06f * sin(timeSec * 2.0f + i * 0.5f);
+        glColor4f(1.0f, 0.85f, 0.20f, alpha);
+        glVertex2f(cx, fh * 0.62f);
+        glColor4f(1.0f, 0.85f, 0.20f, 0.0f);
+        glVertex2f(cx + cos(ang) * fw * 0.55f, fh * 0.62f + sin(ang) * fh * 0.55f);
+    }
+    glEnd();
+    glLineWidth(1.0f);
+
+    // ── GLOW HALO behind title ────────────────────────────────────────────────
+    float haloPulse = 0.15f + 0.10f * sin(timeSec * 2.5f);
+    glBegin(GL_TRIANGLE_FAN);
+    glColor4f(1.0f, 0.85f, 0.10f, haloPulse);
+    glVertex2f(cx, fh * 0.63f);
+    for (int i = 0; i <= 32; ++i) {
+        float ang = i * 6.28318f / 32.0f;
+        glColor4f(1.0f, 0.65f, 0.05f, 0.0f);
+        glVertex2f(cx + cos(ang) * 240.0f, fh * 0.63f + sin(ang) * 60.0f);
+    }
+    glEnd();
+    glDisable(GL_BLEND);
+
+    // ── MAIN CONGRATS TITLE ───────────────────────────────────────────────────
+    // Shadow
+    glColor3f(0.4f, 0.25f, 0.0f);
+    drawText2DCentered(cx + 3.0f, fh * 0.72f - 3.0f, "CONGRATULATIONS!");
+    // Gold pulsing title
+    float pulse = 0.5f + 0.5f * sin(timeSec * 3.0f);
+    glColor3f(1.0f, 0.80f + 0.20f * pulse, 0.10f * pulse);
+    drawText2DCentered(cx, fh * 0.72f, "CONGRATULATIONS!");
+
+    // ── SUBTITLE ─────────────────────────────────────────────────────────────
+    float subPulse = 0.6f + 0.4f * sin(timeSec * 2.0f + 1.0f);
+    glColor3f(0.45f, 1.0f * subPulse, 0.55f);
+    drawText2DCentered(cx, fh * 0.64f, "YOU DEFEATED ALL WARRIORS AND ESCAPED!");
+
+    // ── DECORATIVE DIVIDER ────────────────────────────────────────────────────
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glBegin(GL_QUADS);
+    glColor4f(1.0f, 0.75f, 0.10f, 0.0f);
+    glVertex2f(cx - 280.0f, fh * 0.612f);
+    glColor4f(1.0f, 0.75f, 0.10f, 0.8f);
+    glVertex2f(cx - 80.0f, fh * 0.612f);
+    glVertex2f(cx - 80.0f, fh * 0.606f);
+    glColor4f(1.0f, 0.75f, 0.10f, 0.0f);
+    glVertex2f(cx - 280.0f, fh * 0.606f);
+    glColor4f(1.0f, 0.75f, 0.10f, 0.0f);
+    glVertex2f(cx + 80.0f, fh * 0.612f);
+    glColor4f(1.0f, 0.75f, 0.10f, 0.8f);
+    glVertex2f(cx + 280.0f, fh * 0.612f);
+    glVertex2f(cx + 280.0f, fh * 0.606f);
+    glColor4f(1.0f, 0.75f, 0.10f, 0.0f);
+    glVertex2f(cx + 80.0f, fh * 0.606f);
+    glEnd();
+    glDisable(GL_BLEND);
+
+    // ── TROPHY ICON (OpenGL boxes) ────────────────────────────────────────────
+    float tx = cx;
+    float ty = fh * 0.54f;
+    float trophyPulse = 0.92f + 0.08f * sin(timeSec * 4.0f);
+    // Cup body
+    glColor3f(1.0f * trophyPulse, 0.78f * trophyPulse, 0.05f);
+    drawFilledRect2D(tx - 28.0f, ty,       56.0f, 40.0f);
+    drawFilledRect2D(tx - 20.0f, ty + 40.0f, 40.0f, 14.0f);
+    // Stem
+    drawFilledRect2D(tx - 8.0f,  ty - 18.0f, 16.0f, 20.0f);
+    // Base
+    drawFilledRect2D(tx - 30.0f, ty - 26.0f, 60.0f, 10.0f);
+    // Handles
+    glColor3f(0.85f * trophyPulse, 0.62f, 0.02f);
+    drawFilledRect2D(tx - 44.0f, ty + 10.0f, 18.0f, 20.0f);
+    drawFilledRect2D(tx + 26.0f, ty + 10.0f, 18.0f, 20.0f);
+    // Star on cup
+    glColor3f(1.0f, 1.0f, 0.5f * trophyPulse);
+    drawFilledRect2D(tx - 6.0f, ty + 14.0f, 12.0f, 12.0f);
+    drawFilledRect2D(tx - 12.0f, ty + 18.0f, 24.0f, 4.0f);
+
+    // ── STATS PANEL ───────────────────────────────────────────────────────────
+    glColor3f(0.9f, 0.88f, 0.70f);
+    drawText2DCentered(cx, fh * 0.44f, "- - - MISSION COMPLETE - - -");
+
+    char scoreLine[80];
+    snprintf(scoreLine, sizeof(scoreLine), "Final Score:  %d", pendingScore);
+    glColor3f(0.20f, 1.0f, 0.45f);
+    drawText2DCentered(cx, fh * 0.38f, scoreLine);
+
+    // ── SHOOTING STARS (3 animated sparks) ───────────────────────────────────
+    float starColors[3][3] = {{1.0f,0.85f,0.2f},{0.4f,0.9f,1.0f},{1.0f,0.5f,0.8f}};
+    for (int i = 0; i < 3; ++i) {
+        float phase  = fmod(timeSec * 0.6f + i * 0.45f, 1.0f);
+        float starX  = fw * (0.12f + i * 0.38f) + cos(timeSec + i) * 40.0f;
+        float starY  = fh * (0.20f + phase * 0.35f);
+        float alpha  = sin(phase * 3.14159f);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glColor4f(starColors[i][0], starColors[i][1], starColors[i][2], alpha);
+        drawFilledRect2D(starX - 6.0f, starY - 6.0f, 12.0f, 12.0f);
+        drawFilledRect2D(starX - 2.0f, starY - 12.0f, 4.0f, 24.0f);
+        glDisable(GL_BLEND);
+    }
+
+    // ── NAME ENTRY SECTION ────────────────────────────────────────────────────
     glColor3f(1.0f, 1.0f, 1.0f);
-    drawText2DCentered(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.59f, "Enter your name for the high score list:");
+    drawText2DCentered(cx, fh * 0.28f, "Enter your name for the Hall of Fame:");
 
     char nameLine[48];
     snprintf(nameLine, sizeof(nameLine), "%s_", playerNameLength == 0 ? "" : playerName);
-    glColor3f(0.9f, 0.95f, 0.45f);
-    drawText2DCentered(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.50f, nameLine);
+    float namePulse = 0.7f + 0.3f * sin(timeSec * 4.0f);
+    glColor3f(1.0f, namePulse, 0.15f);
+    drawText2DCentered(cx, fh * 0.20f, nameLine);
 
-    char scoreLine[120];
-    snprintf(scoreLine, sizeof(scoreLine), "Current Score: %d", pendingScore);
-    glColor3f(0.85f, 0.85f, 0.85f);
-    drawText2DCentered(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.41f, scoreLine);
-
-    glColor3f(0.75f, 0.75f, 0.75f);
-    drawText2DCentered(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.28f, "Type letters, Backspace deletes, Enter saves.");
+    glColor3f(0.60f, 0.60f, 0.60f);
+    drawText2DCentered(cx, fh * 0.12f, "Type your name, Backspace to delete, Enter to save.");
 
     glEnable(GL_DEPTH_TEST);
     glPopMatrix();
@@ -1440,6 +2291,7 @@ void drawNameEntryScreen() {
     glPopMatrix();
     glMatrixMode(GL_MODELVIEW);
 }
+
 
 void drawGameOverScreen() {
     int w = glutGet(GLUT_WINDOW_WIDTH);
@@ -1481,7 +2333,10 @@ void renderWorld() {
     renderGhostBoss();
     renderKeys();
     renderDoorOrGate();
-    renderHeldSword();
+    renderHeldGun();
+
+    // Render bonus clock if active (all levels)
+    renderBonusClock();
 }
 
 void display() {
@@ -1498,7 +2353,8 @@ void display() {
     } else if (isGroundLevel()) {
         glClearColor(0.52f, 0.74f, 0.95f, 1.0f);
     } else {
-        glClearColor(0.08f, 0.08f, 0.12f, 1.0f);
+        // Darker dungeon atmosphere
+        glClearColor(0.04f, 0.04f, 0.06f, 1.0f);
     }
 
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -1514,7 +2370,31 @@ void display() {
                   camX + lookX, camY + lookY, camZ + lookZ,
                   0.0f, 1.0f, 0.0f);
 
+        // Set up atmospheric lighting for room levels
+        if (!isGroundLevel()) {
+            glEnable(GL_LIGHTING);
+            glEnable(GL_LIGHT0);
+
+            // Dim ambient for dungeon feel
+            float ambient[] = {0.15f, 0.12f, 0.10f, 1.0f};
+            float diffuse[] = {0.6f, 0.5f, 0.3f, 1.0f};
+            float lightPos[] = {0.0f, 3.5f, 0.0f, 1.0f};
+            glLightfv(GL_LIGHT0, GL_AMBIENT, ambient);
+            glLightfv(GL_LIGHT0, GL_DIFFUSE, diffuse);
+            glLightfv(GL_LIGHT0, GL_POSITION, lightPos);
+
+            glEnable(GL_COLOR_MATERIAL);
+            glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE);
+        }
+
         renderWorld();
+
+        if (!isGroundLevel()) {
+            glDisable(GL_LIGHTING);
+            glDisable(GL_LIGHT0);
+            glDisable(GL_COLOR_MATERIAL);
+        }
+
         drawHUD();
     } else {
         if (gameState == STATE_RULES) {
@@ -1542,7 +2422,7 @@ void tryInteraction() {
         if (!weaponClaimed && distance2D(camX, camZ, weaponPickupPos.x, weaponPickupPos.z) < INTERACT_PICKUP_RANGE) {
             weaponClaimed = true;
             interacted = true;
-            cout << "Sword claimed. You can now fight with left mouse click.\n";
+            cout << "Gun claimed. You can now shoot with left mouse click.\n";
         }
 
         if (!healthPickupClaimed && distance2D(camX, camZ, healthPickupPos.x, healthPickupPos.z) < INTERACT_PICKUP_RANGE) {
@@ -1566,12 +2446,11 @@ void tryInteraction() {
 
         const Vec2& keyPos = levelKeyPositions[currentLevel][i];
         float keyY = levelKeyHeights[currentLevel][i];
-        
-        float dist2D = distance2D(camX, camZ, keyPos.x, keyPos.z);
+
+        float dist2D_ = distance2D(camX, camZ, keyPos.x, keyPos.z);
         float distY = fabs(camY - PLAYER_EYE_HEIGHT - keyY);
-        
-        // Greatly increased pickup radius (cylindrical check vs spherical)
-        if (dist2D < 1.5f && distY < 2.0f) {
+
+        if (dist2D_ < 1.5f && distY < 2.0f) {
             keyTaken[i] = true;
             keysCollected++;
             foundKey = true;
@@ -1596,44 +2475,75 @@ void tryGhostAttack() {
     }
 
     if (!weaponClaimed) {
-        cout << "You need the sword first. Claim it before attacking.\n";
+        cout << "You need the gun first. Claim it before attacking.\n";
         return;
     }
 
     if (weaponAttackCooldown > 0.0f) {
-        cout << "Sword swing is recovering. Click after a moment.\n";
+        cout << "Gun is reloading. Wait a moment.\n";
         return;
     }
 
-    float toGhostX = ghostX - camX;
-    float toGhostZ = ghostZ - camZ;
-    float dist = sqrt(toGhostX * toGhostX + toGhostZ * toGhostZ);
-    if (dist > GHOST_WEAPON_RANGE) {
-        cout << "Too far. Move closer to hit the ghost.\n";
-        return;
-    }
-
+    // Gun shooting - find the warrior we are aiming at (closest within cone)
     float dirX = sin(yaw);
     float dirZ = -cos(yaw);
-    float invDist = (dist > 0.0001f) ? (1.0f / dist) : 0.0f;
-    float faceDot = dirX * (toGhostX * invDist) + dirZ * (toGhostZ * invDist);
-    if (faceDot < 0.08f) {
-        cout << "Face the ghost to land your sword hit.\n";
+
+    // Always trigger fire effects
+    gunRecoilTimer = 0.15f;
+    muzzleFlashTimer = 0.08f;
+    weaponAttackCooldown = 0.40f;
+
+    int   bestTarget = -1;
+    float bestDot    = 0.7f;   // minimum dot product to count as aimed
+    for (int gi = 0; gi < NUM_WARRIORS; ++gi) {
+        if (!ghostAlive[gi]) continue;
+        float toX = ghostX[gi] - camX;
+        float toZ = ghostZ[gi] - camZ;
+        float dist = sqrt(toX * toX + toZ * toZ);
+        if (dist > GHOST_WEAPON_RANGE) continue;
+        float invD = (dist > 0.0001f) ? (1.0f / dist) : 0.0f;
+        float dot  = dirX * (toX * invD) + dirZ * (toZ * invD);
+        if (dot > bestDot) { bestDot = dot; bestTarget = gi; }
+    }
+
+    if (bestTarget < 0) {
+        cout << "Shot missed!\n";
         return;
     }
 
-    ghostHealth -= 1;
-    swordSwingTimer = 0.22f;
-    weaponAttackCooldown = 0.35f;
-    ghostHitFlashTimer = 0.25f;
-    cout << "Sword hit! Ghost health: " << ghostHealth << "\n";
+    ghostHealth[bestTarget] -= 1;
+    ghostHitFlashTimer[bestTarget] = 0.25f;
+    cout << "Hit warrior " << bestTarget << "! HP: " << ghostHealth[bestTarget] << "\n";
 
-    if (ghostHealth <= 0) {
-        ghostHealth = 0;
-        ghostAlive = false;
-        groundDoorUnlockedByBoss = true;
-        doorOpening = true;
-        cout << "Ghost defeated! Escape door unlocking...\n";
+    if (ghostHealth[bestTarget] <= 0) {
+        ghostHealth[bestTarget] = 0;
+        ghostAlive[bestTarget]  = false;
+        cout << "Warrior " << bestTarget << " defeated!\n";
+
+        if (!wave2Spawned) {
+            if (!ghostAlive[0] && !ghostAlive[1]) {
+                wave2Spawned = true;
+                cout << "Wave 1 defeated! 4 more warriors appearing!\n";
+                for (int gi = 2; gi < NUM_WARRIORS; ++gi) {
+                    ghostAlive[gi] = true;
+                    // Reset their positions in case they need it
+                    ghostX[gi] = WARRIOR_START_X[gi];
+                    ghostZ[gi] = WARRIOR_START_Z[gi];
+                    ghostHealth[gi] = GHOST_MAX_HEALTH;
+                }
+            }
+        } else {
+            // Check if ALL remaining warriors are dead
+            bool allDead = true;
+            for (int gi = 2; gi < NUM_WARRIORS; ++gi) {
+                if (ghostAlive[gi]) { allDead = false; break; }
+            }
+            if (allDead) {
+                groundDoorUnlockedByBoss = true;
+                doorOpening = true;
+                cout << "All warriors defeated! Escape door unlocking...\n";
+            }
+        }
     }
 }
 
@@ -1882,12 +2792,17 @@ void update(int value) {
             }
         }
 
-        if (ghostHitFlashTimer > 0.0f) {
-            ghostHitFlashTimer -= dt;
-            if (ghostHitFlashTimer < 0.0f) {
-                ghostHitFlashTimer = 0.0f;
-            }
+        if (gunRecoilTimer > 0.0f) {
+            gunRecoilTimer -= dt;
+            if (gunRecoilTimer < 0.0f) gunRecoilTimer = 0.0f;
         }
+
+        if (muzzleFlashTimer > 0.0f) {
+            muzzleFlashTimer -= dt;
+            if (muzzleFlashTimer < 0.0f) muzzleFlashTimer = 0.0f;
+        }
+
+        // ghostHitFlashTimer per-warrior is updated in the AI loop
 
         if (damageCooldown > 0.0f) {
             damageCooldown -= dt;
@@ -1901,6 +2816,12 @@ void update(int value) {
             if (weaponAttackCooldown < 0.0f) {
                 weaponAttackCooldown = 0.0f;
             }
+        }
+
+        // Bonus clock banner timer
+        if (bonusClockBannerTimer > 0.0f) {
+            bonusClockBannerTimer -= dt;
+            if (bonusClockBannerTimer < 0.0f) bonusClockBannerTimer = 0.0f;
         }
 
         if (isGroundLevel() && groundIntroActive) {
@@ -1924,16 +2845,37 @@ void update(int value) {
             return;
         }
 
+        // ---- Bonus Clock Logic (all levels) ----
+        {
+            if (!bonusClockActive) {
+                bonusClockSpawnTimer -= dt;
+                if (bonusClockSpawnTimer <= 0.0f) {
+                    spawnBonusClock();
+                    bonusClockSpawnTimer = randFloat(5.0f, 11.0f);
+                }
+            } else {
+                // Check if player walks over clock
+                float clockDist = distance2D(camX, camZ, bonusClockX, bonusClockZ);
+                if (clockDist < BONUS_CLOCK_RADIUS) {
+                    levelTimeRemaining += BONUS_CLOCK_TIME_BONUS;
+                    bonusClockActive = false;
+                    bonusClockBannerTimer = 1.5f;
+                    bonusClockSpawnTimer = randFloat(5.0f, 11.0f);
+                    cout << "+8 seconds bonus! Time remaining: " << levelTimeRemaining << "\n";
+                }
+            }
+        }
+
         float halfSize = worldHalfSize();
         for (int i = 0; i < obstacleCount(); ++i) {
             Obstacle& obs = activeObstacles[i];
             obs.x += obs.dx * dt;
             obs.z += obs.dz * dt;
-            
+
             // Bounce off walls
             if (obs.x + obs.sx * 0.5f > halfSize || obs.x - obs.sx * 0.5f < -halfSize) {
                 obs.dx = -obs.dx;
-                obs.x += obs.dx * dt; 
+                obs.x += obs.dx * dt;
             }
             if (obs.z + obs.sz * 0.5f > halfSize || obs.z - obs.sz * 0.5f < -halfSize) {
                 obs.dz = -obs.dz;
@@ -1941,49 +2883,46 @@ void update(int value) {
             }
         }
 
-        if (isGroundLevel() && ghostAlive) {
-            float dxToPlayer = camX - ghostX;
-            float dzToPlayer = camZ - ghostZ;
-            float distToPlayer = sqrt(dxToPlayer * dxToPlayer + dzToPlayer * dzToPlayer);
+        if (isGroundLevel()) {
+            for (int gi = 0; gi < NUM_WARRIORS; ++gi) {
+                if (!ghostAlive[gi]) continue;
 
-            if (distToPlayer > 0.01f) {
-                float strafeX = 0.0f;
-                float strafeZ = 0.0f;
-                float invDist = 1.0f / distToPlayer;
-                float perpX = -dzToPlayer * invDist;
-                float perpZ = dxToPlayer * invDist;
-                float strafeFactor = sin(static_cast<float>(now) * 0.004f) * 0.80f;
-                strafeX = perpX * strafeFactor;
-                strafeZ = perpZ * strafeFactor;
+                float dxToPlayer = camX - ghostX[gi];
+                float dzToPlayer = camZ - ghostZ[gi];
+                float distToPlayer = sqrt(dxToPlayer*dxToPlayer + dzToPlayer*dzToPlayer);
 
-                float chaseX = dxToPlayer * invDist;
-                float chaseZ = dzToPlayer * invDist;
+                if (distToPlayer > 0.01f) {
+                    float invDist  = 1.0f / distToPlayer;
+                    float perpX    = -dzToPlayer * invDist;
+                    float perpZ    =  dxToPlayer * invDist;
+                    // Each warrior gets a slightly different strafe phase
+                    float strafeFactor = sin(static_cast<float>(now) * 0.004f + gi * 1.1f) * 0.80f;
+                    float desiredX = (dxToPlayer * invDist) * 0.82f + perpX * strafeFactor * 0.55f;
+                    float desiredZ = (dzToPlayer * invDist) * 0.82f + perpZ * strafeFactor * 0.55f;
+                    float len = sqrt(desiredX*desiredX + desiredZ*desiredZ);
+                    if (len > 0.0001f) { desiredX /= len; desiredZ /= len; }
 
-                float desiredX = chaseX * 0.82f + strafeX * 0.55f;
-                float desiredZ = chaseZ * 0.82f + strafeZ * 0.55f;
-                float desiredLen = sqrt(desiredX * desiredX + desiredZ * desiredZ);
-                if (desiredLen > 0.0001f) {
-                    desiredX /= desiredLen;
-                    desiredZ /= desiredLen;
+                    float speedBoost = weaponClaimed ? 1.20f : 1.0f;
+                    float step = GHOST_MOVE_SPEED * speedBoost * dt;
+                    if (step > distToPlayer) step = distToPlayer;
+
+                    ghostX[gi] += desiredX * step;
+                    ghostZ[gi] += desiredZ * step;
+
+                    float minB = -worldHalfSize() + WALL_THICKNESS + GHOST_BODY_RADIUS + 0.2f;
+                    float maxB =  worldHalfSize() - WALL_THICKNESS - GHOST_BODY_RADIUS - 0.2f;
+                    ghostX[gi] = clampf(ghostX[gi], minB, maxB);
+                    ghostZ[gi] = clampf(ghostZ[gi], minB, maxB);
                 }
 
-                float speedBoost = weaponClaimed ? 1.20f : 1.0f;
-                float step = GHOST_MOVE_SPEED * speedBoost * dt;
-                if (step > distToPlayer) {
-                    step = distToPlayer;
+                if (distance2D(camX, camZ, ghostX[gi], ghostZ[gi]) < GHOST_TOUCH_DAMAGE_RANGE) {
+                    damagePlayer(1, false);
                 }
 
-                ghostX += desiredX * step;
-                ghostZ += desiredZ * step;
-
-                float minBound = -worldHalfSize() + WALL_THICKNESS + GHOST_BODY_RADIUS + 0.2f;
-                float maxBound = worldHalfSize() - WALL_THICKNESS - GHOST_BODY_RADIUS - 0.2f;
-                ghostX = clampf(ghostX, minBound, maxBound);
-                ghostZ = clampf(ghostZ, minBound, maxBound);
-            }
-
-            if (distance2D(camX, camZ, ghostX, ghostZ) < GHOST_TOUCH_DAMAGE_RANGE) {
-                damagePlayer(1, false);
+                if (ghostHitFlashTimer[gi] > 0.0f) {
+                    ghostHitFlashTimer[gi] -= dt;
+                    if (ghostHitFlashTimer[gi] < 0.0f) ghostHitFlashTimer[gi] = 0.0f;
+                }
             }
         }
 
@@ -2023,13 +2962,10 @@ void update(int value) {
         if (keyStates['d']) inputX += 1.0f;
 
         if (inputX != 0.0f || inputZ != 0.0f) {
-            // Normalize input so diagonal movement isn't faster
             float len = sqrt(inputX * inputX + inputZ * inputZ);
             inputX /= len;
             inputZ /= len;
 
-            // Frame-rate independent speed scaling 
-            // (assuming original 0.07 was tuned for ~16ms frame / 60 FPS)
             float moveSpeed = currentMoveSpeed() * (dt / 0.016666f);
 
             float dx = (inputZ * forwardX + inputX * rightX) * moveSpeed;
@@ -2096,6 +3032,7 @@ void init() {
     playerLives = MAX_LIVES;
     gameOver = false;
     gameCompleted = false;
+    initTorchFlickers();
     startMenu();
 }
 
@@ -2120,7 +3057,7 @@ int main(int argc, char** argv) {
     glutTimerFunc(16, update, 0);
 
     cout << "Escape room ready. Use the menu to start.\n";
-    cout << "Controls in game: WASD move, Mouse/Arrow keys look, E interact, Left click attack (ground), Hold 4 medkit, Esc menu.\n";
+    cout << "Controls: WASD move, Mouse look, E interact, Left click shoot (ground), Hold 4 medkit, Space jump, Esc menu.\n";
 
     glutMainLoop();
     return 0;

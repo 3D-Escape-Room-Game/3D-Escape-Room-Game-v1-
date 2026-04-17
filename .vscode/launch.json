@@ -2,16 +2,23 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "C/C++ Runner: Debug Session",
+      "name": "Debug Escape Room",
       "type": "cppdbg",
       "request": "launch",
       "args": [],
       "stopAtEntry": false,
       "externalConsole": true,
-      "cwd": "d:/Projects(Uni)/Computer Graphics/3D Escape Room Game(OpenGL C++)",
-      "program": "d:/Projects(Uni)/Computer Graphics/3D Escape Room Game(OpenGL C++)/build/Debug/outDebug",
+      "cwd": "${workspaceFolder}",
+      "program": "${workspaceFolder}/output/main.exe",
+      "environment": [
+        {
+          "name": "PATH",
+          "value": "C:/msys64/mingw64/bin;${env:PATH}"
+        }
+      ],
       "MIMode": "gdb",
-      "miDebuggerPath": "gdb",
+      "miDebuggerPath": "C:/msys64/mingw64/bin/gdb.exe",
+      "preLaunchTask": "Build Escape Room",
       "setupCommands": [
         {
           "description": "Enable pretty-printing for gdb",
