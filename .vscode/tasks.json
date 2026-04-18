@@ -15,7 +15,8 @@
         "${workspaceFolder}/output/main.exe",
         "-lfreeglut",
         "-lopengl32",
-        "-lglu32"
+        "-lglu32",
+        "-lwinmm"
       ],
       "group": {
         "kind": "build",

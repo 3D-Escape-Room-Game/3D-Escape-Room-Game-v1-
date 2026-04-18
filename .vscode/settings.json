@@ -39,12 +39,14 @@
     "-std=c++17",
     "-lfreeglut",
     "-lopengl32",
-    "-lglu32"
+    "-lglu32",
+    "-lwinmm"
   ],
   "C_Cpp_Runner.linkerArgs": [
     "-lfreeglut",
     "-lopengl32",
-    "-lglu32"
+    "-lglu32",
+    "-lwinmm"
   ],
   "C_Cpp_Runner.includePaths": [],
   "C_Cpp_Runner.includeSearch": [
@@ -66,8 +68,8 @@
   "C_Cpp_Runner.useLinkTimeOptimization": false,
   "C_Cpp_Runner.msvcSecureNoWarnings": false,
   "code-runner.executorMap": {
-    "cpp": "cd /d \"$dir\" && C:\\msys64\\mingw64\\bin\\g++.exe $fileName -o .\\output\\$fileNameWithoutExt.exe -lfreeglut -lopengl32 -lglu32 && .\\output\\$fileNameWithoutExt.exe"
+    "cpp": "cd /d \"$dir\" && C:\\msys64\\mingw64\\bin\\g++.exe $fileName -o .\\output\\$fileNameWithoutExt.exe -lfreeglut -lopengl32 -lglu32 -lwinmm && .\\output\\$fileNameWithoutExt.exe"
   },
-  "c-cpp-compile-run.cpp-flags": "-Wall -Wextra -g3 -std=c++17 -lfreeglut -lopengl32 -lglu32",
+  "c-cpp-compile-run.cpp-flags": "-Wall -Wextra -g3 -std=c++17 -lfreeglut -lopengl32 -lglu32 -lwinmm",
   "c-cpp-compile-run.cpp-compiler": "C:/msys64/mingw64/bin/g++.exe"
 }

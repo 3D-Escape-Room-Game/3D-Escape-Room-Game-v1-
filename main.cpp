@@ -11,6 +11,11 @@
 #include <vector>
 #include <iostream>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <mmsystem.h>
+#endif
+
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
@@ -66,6 +71,17 @@ const float GRAVITY_ACCEL = 9.2f;
 const float FALL_DAMAGE_THRESHOLD = 1.15f;
 const int MAX_LIVES = 3;
 const char* HIGHSCORE_FILE = "highscores.txt";
+
+const char* SFX_FOLDER_PRIMARY = "assets/sfx/";
+const char* SFX_FOLDER_FALLBACK = "../assets/sfx/";
+const char* SFX_FOLDER_ALT1 = "sfx/";
+const char* SFX_FOLDER_ALT2 = "../sfx/";
+const char* SFX_FILE_CLAIM = "claim.wav";
+const char* SFX_FILE_UNLOCK = "unlock.wav";
+const char* SFX_FILE_LEVEL_UP = "level_up.wav";
+const char* SFX_FILE_COMPLETE_GAME = "complete_game.wav";
+const char* SFX_FILE_GAME_OVER = "game_over.wav";
+const float SFX_MASTER_VOLUME = 0.38f; // 0.0 - 1.0, reduce if too loud
 
 const int TOTAL_LEVELS = 4;
 const int MAX_KEYS = 3;
@@ -143,8 +159,8 @@ GLuint startScreenTexture = 0;
 
 void loadBackgroundTexture() {
     int width, height, channels;
-    unsigned char* data = stbi_load("3d-escape.png", &width, &height, &channels, 4);
-    if (!data) data = stbi_load("../3d-escape.png", &width, &height, &channels, 4);
+    unsigned char* data = stbi_load("assets/images/image.png", &width, &height, &channels, 4);
+    if (!data) data = stbi_load("../assets/images/image.png", &width, &height, &channels, 4);
     if (data) {
         glGenTextures(1, &startScreenTexture);
         glBindTexture(GL_TEXTURE_2D, startScreenTexture);
@@ -154,9 +170,9 @@ void loadBackgroundTexture() {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
         gluBuild2DMipmaps(GL_TEXTURE_2D, GL_RGBA, width, height, GL_RGBA, GL_UNSIGNED_BYTE, data);
         stbi_image_free(data);
-        cout << "Loaded 3d-escape.png successfully.\n";
+        cout << "Loaded assets/images/image.png successfully.\n";
     } else {
-        cout << "Failed to load 3d-escape.png. Reason: " << stbi_failure_reason() << "\n";
+        cout << "Failed to load assets/images/image.png. Reason: " << stbi_failure_reason() << "\n";
     }
 }
 
@@ -186,6 +202,13 @@ bool doorOpening = false;
 float doorAngle = 0.0f;
 bool gameCompleted = false;
 bool gameOver = false;
+bool victorySoundPlayed = false;
+bool gameOverSoundPlayed = false;
+bool isFullscreen = false;
+int windowedX = 60;
+int windowedY = 60;
+int windowedWidth = 900;
+int windowedHeight = 650;
 int levelBannerFrames = 0;
 float levelTimeRemaining = 0.0f;
 float damageCooldown = 0.0f;
@@ -343,15 +366,41 @@ void drawFilledRect2D(float x, float y, float w, float h) {
     glEnd();
 }
 
+void drawPanelBox2D(float x, float y, float w, float h,
+                    float bodyR, float bodyG, float bodyB,
+                    float borderR, float borderG, float borderB) {
+    glColor3f(borderR * 0.45f, borderG * 0.45f, borderB * 0.45f);
+    drawFilledRect2D(x - 3.0f, y - 3.0f, w + 6.0f, h + 6.0f);
+
+    glColor3f(borderR, borderG, borderB);
+    drawFilledRect2D(x, y, w, h);
+
+    glColor3f(bodyR, bodyG, bodyB);
+    drawFilledRect2D(x + 2.0f, y + 2.0f, w - 4.0f, h - 4.0f);
+
+    glColor3f(borderR * 1.10f, borderG * 1.10f, borderB * 1.10f);
+    drawFilledRect2D(x + 6.0f, y + h - 10.0f, w - 12.0f, 3.0f);
+}
+
 void drawText2D(float x, float y, const char* text) {
+    GLfloat originalColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    glGetFloatv(GL_CURRENT_COLOR, originalColor);
+
+    glColor4f(0.02f, 0.03f, 0.05f, 0.85f);
+    glRasterPos2f(x + 1.3f, y - 1.3f);
+    for (const char* p = text; *p; ++p) {
+        glutBitmapCharacter(GLUT_BITMAP_9_BY_15, *p);
+    }
+
+    glColor4fv(originalColor);
     glRasterPos2f(x, y);
     for (const char* p = text; *p; ++p) {
-        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, *p);
+        glutBitmapCharacter(GLUT_BITMAP_9_BY_15, *p);
     }
 }
 
 int bitmapTextWidth(const char* text) {
-    return glutBitmapLength(GLUT_BITMAP_HELVETICA_18, reinterpret_cast<const unsigned char*>(text));
+    return glutBitmapLength(GLUT_BITMAP_9_BY_15, reinterpret_cast<const unsigned char*>(text));
 }
 
 void drawText2DRightAligned(float rightX, float y, const char* text) {
@@ -361,6 +410,180 @@ void drawText2DRightAligned(float rightX, float y, const char* text) {
 void drawText2DCentered(float centerX, float y, const char* text) {
     drawText2D(centerX - static_cast<float>(bitmapTextWidth(text)) * 0.5f, y, text);
 }
+
+int timesRomanTextWidth(const char* text) {
+    return glutBitmapLength(GLUT_BITMAP_TIMES_ROMAN_24, reinterpret_cast<const unsigned char*>(text));
+}
+
+void drawTimesRomanText2D(float x, float y, const char* text) {
+    glRasterPos2f(x, y);
+    for (const char* p = text; *p; ++p) {
+        glutBitmapCharacter(GLUT_BITMAP_TIMES_ROMAN_24, *p);
+    }
+}
+
+void drawTimesRomanText2DCentered(float centerX, float y, const char* text) {
+    drawTimesRomanText2D(centerX - static_cast<float>(timesRomanTextWidth(text)) * 0.5f, y, text);
+}
+
+void drawStrokeText(float x, float y, float scale, float lineWidth, const char* text) {
+    glPushMatrix();
+    glTranslatef(x, y, 0.0f);
+    glScalef(scale, scale, 1.0f);
+    glLineWidth(lineWidth);
+    for (const char* p = text; *p; ++p) {
+        glutStrokeCharacter(GLUT_STROKE_ROMAN, *p);
+    }
+    glLineWidth(1.0f);
+    glPopMatrix();
+}
+
+void drawStrokeTextCentered(float centerX, float y, float scale, float lineWidth, const char* text) {
+    float width = 0.0f;
+    for (const char* p = text; *p; ++p) {
+        width += glutStrokeWidth(GLUT_STROKE_ROMAN, *p);
+    }
+    width *= scale;
+    drawStrokeText(centerX - width * 0.5f, y, scale, lineWidth, text);
+}
+
+void applySfxMasterVolume() {
+#ifdef _WIN32
+    float v = SFX_MASTER_VOLUME;
+    if (v < 0.0f) v = 0.0f;
+    if (v > 1.0f) v = 1.0f;
+
+    DWORD channelVolume = static_cast<DWORD>(v * 65535.0f);
+    DWORD packedVolume = (channelVolume & 0xFFFF) | ((channelVolume & 0xFFFF) << 16);
+    waveOutSetVolume(reinterpret_cast<HWAVEOUT>(WAVE_MAPPER), packedVolume);
+#endif
+}
+
+void playSoundEffect(const char* fileName) {
+#ifdef _WIN32
+    applySfxMasterVolume();
+
+    auto tryPlay = [&](const string& path) -> bool {
+        return PlaySoundA(path.c_str(), NULL, SND_FILENAME | SND_ASYNC | SND_NODEFAULT) != 0;
+    };
+
+    auto tryPlayMci = [&](const string& path) -> bool {
+        static int slot = 0;
+        char alias[32];
+        snprintf(alias, sizeof(alias), "sfx%d", slot);
+        slot = (slot + 1) % 8;
+
+        char cmd[768];
+        snprintf(cmd, sizeof(cmd), "close %s", alias);
+        mciSendStringA(cmd, NULL, 0, NULL);
+
+        snprintf(cmd, sizeof(cmd), "open \"%s\" type waveaudio alias %s", path.c_str(), alias);
+        if (mciSendStringA(cmd, NULL, 0, NULL) != 0) {
+            return false;
+        }
+
+        snprintf(cmd, sizeof(cmd), "setaudio %s volume to %d", alias, static_cast<int>(SFX_MASTER_VOLUME * 1000.0f));
+        mciSendStringA(cmd, NULL, 0, NULL);
+
+        snprintf(cmd, sizeof(cmd), "play %s", alias);
+        if (mciSendStringA(cmd, NULL, 0, NULL) != 0) {
+            snprintf(cmd, sizeof(cmd), "close %s", alias);
+            mciSendStringA(cmd, NULL, 0, NULL);
+            return false;
+        }
+
+        return true;
+    };
+
+    // 1) Try common working-directory relative paths
+    const char* folders[] = {SFX_FOLDER_PRIMARY, SFX_FOLDER_FALLBACK, SFX_FOLDER_ALT1, SFX_FOLDER_ALT2};
+    for (int i = 0; i < 4; ++i) {
+        string path = string(folders[i]) + fileName;
+        if (tryPlay(path) || tryPlayMci(path)) {
+            cout << "SFX played: " << path << "\n";
+            return;
+        }
+    }
+
+    // 2) Try paths relative to executable location (works even when cwd changes)
+    char exePath[MAX_PATH] = {0};
+    DWORD n = GetModuleFileNameA(NULL, exePath, MAX_PATH);
+    if (n > 0 && n < MAX_PATH) {
+        string exeDir(exePath);
+        size_t sep = exeDir.find_last_of("\\/");
+        if (sep != string::npos) {
+            exeDir = exeDir.substr(0, sep);
+
+            const char* exeRelativeFolders[] = {
+                "\\assets\\sfx\\",
+                "\\..\\assets\\sfx\\",
+                "\\sfx\\",
+                "\\..\\sfx\\",
+                "\\"
+            };
+
+            for (int i = 0; i < 5; ++i) {
+                string path = exeDir + exeRelativeFolders[i] + fileName;
+                if (tryPlay(path) || tryPlayMci(path)) {
+                    cout << "SFX played: " << path << "\n";
+                    return;
+                }
+            }
+        }
+    }
+
+    cout << "SFX missing/unplayable: " << fileName << "\n";
+#else
+    (void)fileName;
+#endif
+}
+
+void playVictorySound() {
+    if (victorySoundPlayed) {
+        return;
+    }
+    victorySoundPlayed = true;
+    playSoundEffect(SFX_FILE_COMPLETE_GAME);
+}
+
+void playGameOverSound() {
+    if (gameOverSoundPlayed) {
+        return;
+    }
+    gameOverSoundPlayed = true;
+    playSoundEffect(SFX_FILE_GAME_OVER);
+}
+
+void playClaimSound() {
+    playSoundEffect(SFX_FILE_CLAIM);
+}
+
+void playUnlockSound() {
+    playSoundEffect(SFX_FILE_UNLOCK);
+}
+
+void playLevelUpSound() {
+    playSoundEffect(SFX_FILE_LEVEL_UP);
+}
+
+void toggleFullscreen() {
+    if (!isFullscreen) {
+        windowedX = glutGet(GLUT_WINDOW_X);
+        windowedY = glutGet(GLUT_WINDOW_Y);
+        windowedWidth = glutGet(GLUT_WINDOW_WIDTH);
+        windowedHeight = glutGet(GLUT_WINDOW_HEIGHT);
+
+        glutFullScreen();
+        isFullscreen = true;
+    } else {
+        glutReshapeWindow(windowedWidth, windowedHeight);
+        glutPositionWindow(windowedX, windowedY);
+        isFullscreen = false;
+    }
+
+    glutPostRedisplay();
+}
+
 
 void resetInputStates() {
     for (int i = 0; i < 256; ++i) {
@@ -432,6 +655,8 @@ void startMenu() {
     menuSelection = 0;
     gameCompleted = false;
     gameOver = false;
+    victorySoundPlayed = false;
+    gameOverSoundPlayed = false;
     resetInputStates();
     resetNameEntry();
 }
@@ -442,6 +667,8 @@ void startGame() {
     playerLives = MAX_LIVES;
     gameCompleted = false;
     gameOver = false;
+    victorySoundPlayed = false;
+    gameOverSoundPlayed = false;
     gameState = STATE_PLAYING;
     startLevel(0);
 }
@@ -542,6 +769,7 @@ void startLevel(int levelIndex) {
     currentLevel = levelIndex;
     gameState = STATE_PLAYING;
     gameOver = false;
+    gameOverSoundPlayed = false;
     for (int i = 0; i < obstacleCount(); ++i) {
         activeObstacles[i] = levelObstacles[currentLevel][i];
         activeObstacles[i].dx = 0.0f;
@@ -665,6 +893,7 @@ void handleObstacleHit() {
         gameOver = true;
         gameState = STATE_GAME_OVER;
         resetInputStates();
+        playGameOverSound();
         cout << "Game over! Touched obstacle " << MAX_OBSTACLE_HITS << " times.\n";
     }
 }
@@ -685,6 +914,7 @@ void damagePlayer(int amount, bool bypassCooldown) {
         gameOver = true;
         gameState = STATE_GAME_OVER;
         resetInputStates();
+        playGameOverSound();
         cout << "Game over. Health depleted or hit obstacle.\n";
         return;
     }
@@ -794,7 +1024,6 @@ void renderWallChains() {
         glColor3f(0.35f, 0.33f, 0.30f);
         glPushMatrix();
         glTranslatef(cx, 2.8f, wallZ);
-        glutSolidTorus(0.03f, 0.10f, 8, 16);
         glPopMatrix();
 
         // Chain links (hanging down)
@@ -1609,10 +1838,14 @@ void renderGroundLevel() {
 
 void drawHUDBar(float x, float y, float w, float h, float ratio, float r, float g, float b) {
     ratio = clampf(ratio, 0.0f, 1.0f);
-    glColor3f(0.15f, 0.15f, 0.15f);
+    glColor3f(0.05f, 0.05f, 0.07f);
+    drawFilledRect2D(x - 2.0f, y - 2.0f, w + 4.0f, h + 4.0f);
+    glColor3f(0.18f, 0.22f, 0.28f);
     drawFilledRect2D(x, y, w, h);
     glColor3f(r, g, b);
     drawFilledRect2D(x + 2.0f, y + 2.0f, (w - 4.0f) * ratio, h - 4.0f);
+    glColor3f(0.80f, 0.90f, 1.00f);
+    drawFilledRect2D(x + 2.0f, y + h - 3.0f, (w - 4.0f) * ratio, 1.0f);
 }
 
 void drawHUD() {
@@ -1639,7 +1872,7 @@ void drawHUD() {
     int seconds = timeSeconds % 60;
     snprintf(timerLine, sizeof(timerLine), "Time: %02d:%02d", minutes, seconds);
 
-    snprintf(line1, sizeof(line1), "Story: Escape the rooms, then survive the ground. Level %d (%s)", currentLevel + 1, levelNames[currentLevel]);
+    snprintf(line1, sizeof(line1), "MISSION: Break out, survive the arena. STAGE %d (%s)", currentLevel + 1, levelNames[currentLevel]);
     glColor3f(1.0f, 1.0f, 1.0f);
     drawText2D(15.0f, static_cast<float>(h - 25), line1);
 
@@ -1648,13 +1881,13 @@ void drawHUD() {
             // Count alive warriors
             int aliveCount = 0;
             for (int gi = 0; gi < NUM_WARRIORS; ++gi) if (ghostAlive[gi]) aliveCount++;
-            snprintf(line2, sizeof(line2), "Warriors Alive: %d   Gun: %s   Medkit: %s   Health: %d/%d",
+            snprintf(line2, sizeof(line2), "HOSTILES: %d   WEAPON: %s   MEDKIT: %s   HP: %d/%d",
                 aliveCount,
                 weaponClaimed ? "Claimed" : "Not Claimed",
                 (!healthPickupClaimed ? "Not Claimed" : (medkitUsed ? "Used" : "Ready")),
                 playerLives, MAX_LIVES);
         } else {
-            snprintf(line2, sizeof(line2), "Keys: %d/%d   Hits: %d/%d   Health: %d/%d   Difficulty: %s", keysCollected, keysRequired(), obstacleHitCount, MAX_OBSTACLE_HITS, playerLives, MAX_LIVES, levelNames[currentLevel]);
+            snprintf(line2, sizeof(line2), "KEYS: %d/%d   COLLISIONS: %d/%d   HP: %d/%d   MODE: %s", keysCollected, keysRequired(), obstacleHitCount, MAX_OBSTACLE_HITS, playerLives, MAX_LIVES, levelNames[currentLevel]);
         }
         glColor3f(0.95f, 0.95f, 0.7f);
         drawText2D(15.0f, static_cast<float>(h - 52), line2);
@@ -1664,36 +1897,36 @@ void drawHUD() {
             for (int gi = 0; gi < NUM_WARRIORS; ++gi) if (ghostAlive[gi]) aliveCount++;
             if (groundIntroActive) {
                 glColor3f(0.95f, 0.95f, 0.7f);
-                drawText2D(15.0f, static_cast<float>(h - 80), "Objective: Read all rules, then press ENTER to start this ground fight.");
+                drawText2D(15.0f, static_cast<float>(h - 80), "OBJECTIVE: Read combat intel, then press ENTER to begin.");
             } else if (!weaponClaimed) {
                 glColor3f(1.0f, 0.95f, 0.2f);
-                drawText2D(15.0f, static_cast<float>(h - 80), "Objective: Claim the gun first (Press E near gun). Then left-click to shoot.");
+                drawText2D(15.0f, static_cast<float>(h - 80), "OBJECTIVE: Secure weapon (E near pickup), then fire with LEFT CLICK.");
             } else if (aliveCount > 0) {
                 glColor3f(1.0f, 0.78f, 0.35f);
-                drawText2D(15.0f, static_cast<float>(h - 80), "Objective: Shoot the ghost with LEFT CLICK. Claim medkit and hold 4 to use it.");
+                drawText2D(15.0f, static_cast<float>(h - 80), "OBJECTIVE: Eliminate hostiles. Grab medkit and hold 4 to trigger.");
             } else if (!doorOpening) {
                 glColor3f(0.7f, 1.0f, 0.7f);
-                drawText2D(15.0f, static_cast<float>(h - 80), "Objective: Ghost defeated. Escape door is unlocking.");
+                drawText2D(15.0f, static_cast<float>(h - 80), "OBJECTIVE: Arena cleared. Escape gate is unlocking.");
             } else {
                 glColor3f(0.7f, 1.0f, 1.0f);
-                drawText2D(15.0f, static_cast<float>(h - 80), "Objective: Run through the opened escape door to complete the game.");
+                drawText2D(15.0f, static_cast<float>(h - 80), "OBJECTIVE: Push through the opened gate to finish mission.");
             }
         } else if (keysCollected < keysRequired()) {
             glColor3f(1.0f, 0.95f, 0.2f);
-            drawText2D(15.0f, static_cast<float>(h - 80), "Objective: Find keys (some are above obstacles). Press E near key. Space = jump.");
+            drawText2D(15.0f, static_cast<float>(h - 80), "OBJECTIVE: Collect all keys. E to grab, SPACE to clear obstacles.");
         } else if (!doorOpening) {
             glColor3f(0.7f, 1.0f, 0.7f);
-            drawText2D(15.0f, static_cast<float>(h - 80), "Objective: Go to the door and press E to unlock this level.");
+            drawText2D(15.0f, static_cast<float>(h - 80), "OBJECTIVE: Move to the gate and press E to unlock.");
         } else {
             glColor3f(0.7f, 1.0f, 1.0f);
-            drawText2D(15.0f, static_cast<float>(h - 80), "Objective: Walk through the opened exit.");
+            drawText2D(15.0f, static_cast<float>(h - 80), "OBJECTIVE: Advance through the opened exit.");
         }
 
         glColor3f(1.0f, 1.0f, 1.0f);
         drawText2DRightAligned(static_cast<float>(w - 15), static_cast<float>(h - 25), timerLine);
         drawHUDBar(static_cast<float>(w - 250), static_cast<float>(h - 55), 220.0f, 18.0f, static_cast<float>(playerLives) / static_cast<float>(MAX_LIVES), 0.25f, 0.95f, 0.35f);
         glColor3f(1.0f, 1.0f, 1.0f);
-        drawText2D(static_cast<float>(w - 250), static_cast<float>(h - 75), "Health");
+        drawText2D(static_cast<float>(w - 250), static_cast<float>(h - 75), "HP CORE");
 
         if (isGroundLevel() && healthPickupClaimed && !medkitUsed && !groundIntroActive) {
             float medkitRatio = medkitHoldTimer / MEDKIT_HOLD_REQUIRED;
@@ -1701,7 +1934,7 @@ void drawHUD() {
             if (medkitRatio > 1.0f) medkitRatio = 1.0f;
             drawHUDBar(static_cast<float>(w - 250), static_cast<float>(h - 102), 220.0f, 14.0f, medkitRatio, 0.95f, 0.25f, 0.25f);
             glColor3f(1.0f, 1.0f, 1.0f);
-            drawText2D(static_cast<float>(w - 250), static_cast<float>(h - 118), "Hold 4 to use medkit");
+            drawText2D(static_cast<float>(w - 250), static_cast<float>(h - 118), "Hold 4 to inject medkit");
         }
 
         // Ghost health HUD: compact bars for each warrior
@@ -1766,7 +1999,13 @@ void drawHUD() {
                 if (isGroundLevel()) {
                     glColor3f(1.0f, 0.3f, 0.3f);
                     drawText2DCentered(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.45f, "ESCAPE DOOR SEALED");
-                    if (ghostAlive) {
+                    int aliveAtDoor = 0;
+                    for (int gi = 0; gi < NUM_WARRIORS; ++gi) {
+                        if (ghostAlive[gi]) {
+                            aliveAtDoor++;
+                        }
+                    }
+                    if (aliveAtDoor > 0) {
                         drawText2DCentered(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.41f, "Defeat the ghost to unlock the door.");
                     } else {
                         drawText2DCentered(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.41f, "Ghost down. Door mechanism is unlocking...");
@@ -1833,10 +2072,7 @@ void drawHUD() {
         glColor4f(0.02f, 0.04f, 0.06f, 0.80f);
         drawFilledRect2D(0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h));
 
-        glColor4f(0.08f, 0.12f, 0.18f, 0.95f);
-        drawFilledRect2D(panelX, panelY, panelW, panelH);
-        glColor4f(0.18f, 0.44f, 0.58f, 1.0f);
-        drawFilledRect2D(panelX + 4.0f, panelY + panelH - 6.0f, panelW - 8.0f, 2.5f);
+        drawPanelBox2D(panelX, panelY, panelW, panelH, 0.08f, 0.12f, 0.18f, 0.18f, 0.44f, 0.58f);
 
         glDisable(GL_BLEND);
 
@@ -1885,10 +2121,7 @@ void drawRulesScreen() {
     float panelW = static_cast<float>(w) * 0.76f;
     float panelH = static_cast<float>(h) * 0.84f;
 
-    glColor3f(0.12f, 0.05f, 0.05f);
-    drawFilledRect2D(panelX, panelY, panelW, panelH);
-    glColor3f(0.35f, 0.15f, 0.15f);
-    drawFilledRect2D(panelX + 4.0f, panelY + panelH - 6.0f, panelW - 8.0f, 2.5f);
+    drawPanelBox2D(panelX, panelY, panelW, panelH, 0.12f, 0.05f, 0.05f, 0.35f, 0.15f, 0.15f);
 
     glColor3f(1.0f, 0.45f, 0.45f);
     drawText2DCentered(static_cast<float>(w) * 0.5f, panelY + panelH - 42.0f, "GAME RULES - SURVIVAL PROTOCOL");
@@ -1935,32 +2168,12 @@ void drawMenuScreen() {
 
     glDisable(GL_DEPTH_TEST);
 
-    float t = static_cast<float>(glutGet(GLUT_ELAPSED_TIME));
-
-    if (startScreenTexture == 0) {
-        glBegin(GL_QUADS);
-        glColor3f(0.03f, 0.07f, 0.11f); glVertex2f(0.0f, 0.0f);
-        glColor3f(0.03f, 0.07f, 0.11f); glVertex2f(static_cast<float>(w), 0.0f);
-        glColor3f(0.02f, 0.03f, 0.08f); glVertex2f(static_cast<float>(w), static_cast<float>(h));
-        glColor3f(0.02f, 0.03f, 0.08f); glVertex2f(0.0f, static_cast<float>(h));
-        glEnd();
-
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        float glowX = static_cast<float>(w) * 0.5f + sin(t * 0.0011f) * static_cast<float>(w) * 0.25f;
-        float glowY = static_cast<float>(h) * 0.72f + cos(t * 0.0013f) * 36.0f;
-        glColor4f(0.10f, 0.60f, 0.85f, 0.12f);
-        drawFilledRect2D(glowX - 220.0f, glowY - 100.0f, 440.0f, 200.0f);
-        glColor4f(0.05f, 0.35f, 0.60f, 0.10f);
-        drawFilledRect2D(glowX - 330.0f, glowY - 170.0f, 660.0f, 340.0f);
-        glDisable(GL_BLEND);
-    }
-
     if (startScreenTexture != 0) {
         glEnable(GL_TEXTURE_2D);
         glBindTexture(GL_TEXTURE_2D, startScreenTexture);
         glColor3f(1.0f, 1.0f, 1.0f);
 
+        // 1. Draw base sharp image
         glBegin(GL_QUADS);
         glTexCoord2f(0.0f, 0.0f); glVertex2f(0.0f, h);
         glTexCoord2f(1.0f, 0.0f); glVertex2f(w, h);
@@ -1968,71 +2181,108 @@ void drawMenuScreen() {
         glTexCoord2f(0.0f, 1.0f); glVertex2f(0.0f, 0.0f);
         glEnd();
 
-        glDisable(GL_TEXTURE_2D);
-
-        // Add a dark semi-transparent overlay over the image so it looks slightly blurry/dim
+        // 2. Multi-pass pseudo blur
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glColor4f(0.05f, 0.05f, 0.1f, 0.70f);
-        drawFilledRect2D(0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h));
+        
+        glColor4f(1.0f, 1.0f, 1.0f, 0.15f);
+        float blurRadius = 2.5f;
+        float offsets[4][2] = {
+            {-blurRadius, -blurRadius},
+            {blurRadius, -blurRadius},
+            {-blurRadius, blurRadius},
+            {blurRadius, blurRadius}
+        };
+
+        for (int i = 0; i < 4; ++i) {
+            float ox = offsets[i][0];
+            float oy = offsets[i][1];
+            glBegin(GL_QUADS);
+            glTexCoord2f(0.0f, 0.0f); glVertex2f(ox, h + oy);
+            glTexCoord2f(1.0f, 0.0f); glVertex2f(w + ox, h + oy);
+            glTexCoord2f(1.0f, 1.0f); glVertex2f(w + ox, oy);
+            glTexCoord2f(0.0f, 1.0f); glVertex2f(ox, oy);
+            glEnd();
+        }
+
+        glDisable(GL_TEXTURE_2D);
+
+        // 3. Dark dimming overlay to make text pop
+        glColor4f(0.05f, 0.05f, 0.08f, 0.35f);
+        glBegin(GL_QUADS);
+        glVertex2f(0.0f, 0.0f);
+        glVertex2f(w, 0.0f);
+        glVertex2f(w, h);
+        glVertex2f(0.0f, h);
+        glEnd();
+
         glDisable(GL_BLEND);
+    } else {
+        // Fallback background
+        glBegin(GL_QUADS);
+        glColor3f(0.03f, 0.07f, 0.11f); glVertex2f(0.0f, 0.0f);
+        glColor3f(0.03f, 0.07f, 0.11f); glVertex2f(static_cast<float>(w), 0.0f);
+        glColor3f(0.02f, 0.03f, 0.08f); glVertex2f(static_cast<float>(w), static_cast<float>(h));
+        glColor3f(0.02f, 0.03f, 0.08f); glVertex2f(0.0f, static_cast<float>(h));
+        glEnd();
     }
 
-    float panelX = static_cast<float>(w) * 0.22f;
-    float panelY = static_cast<float>(h) * 0.15f;
-    float panelW = static_cast<float>(w) * 0.56f;
-    float panelH = static_cast<float>(h) * 0.72f;
+    // Draw "3D ESCAPE ROOM" subtitle and descriptions
+    float headerY = static_cast<float>(h) * 0.81f;
+    float subtitleY = static_cast<float>(h) * 0.765f;
+    float headerScale = 0.24f;
 
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glColor4f(0.04f, 0.09f, 0.13f, 0.88f);
-    drawFilledRect2D(panelX - 8.0f, panelY - 8.0f, panelW + 16.0f, panelH + 16.0f);
-    glDisable(GL_BLEND);
+    glColor3f(0.12f, 0.08f, 0.03f);
+    drawStrokeTextCentered(static_cast<float>(w) * 0.5f + 2.0f, headerY - 3.0f, headerScale, 3.6f, "3D ESCAPE ROOM");
 
-    glColor3f(0.08f, 0.14f, 0.18f);
-    drawFilledRect2D(panelX, panelY, panelW, panelH);
-    glColor3f(0.15f, 0.28f, 0.34f);
-    drawFilledRect2D(panelX + 4.0f, panelY + panelH - 6.0f, panelW - 8.0f, 2.5f);
+    glColor3f(0.98f, 0.84f, 0.30f);
+    drawStrokeTextCentered(static_cast<float>(w) * 0.5f, headerY, headerScale, 3.8f, "3D ESCAPE ROOM");
 
-    glColor3f(0.52f, 1.0f, 0.80f);
-    drawText2DCentered(static_cast<float>(w) * 0.5f, panelY + panelH - 72.0f, "3D ESCAPE ROOM");
     glColor3f(0.85f, 0.93f, 0.98f);
-    drawText2DCentered(static_cast<float>(w) * 0.5f, panelY + panelH - 106.0f, "Rooms, climbing, timer pressure, and final survival.");
+    drawText2DCentered(static_cast<float>(w) * 0.5f, subtitleY, "Rooms, climbing, timer pressure, and final survival.");
 
-    float buttonW = panelW * 0.60f;
-    float buttonH = 46.0f;
-    float buttonX = panelX + (panelW - buttonW) * 0.5f;
-    float firstButtonY = panelY + panelH * 0.52f;
+    // Center buttons over the door
+    float firstButtonY = static_cast<float>(h) * 0.58f;
+    float optionScale = 0.22f;
 
     for (int i = 0; i < MENU_ITEMS; ++i) {
-        float y = firstButtonY - i * 72.0f;
+        float y = firstButtonY - i * 65.0f;
         bool selected = (i == menuSelection);
 
-        glColor3f(selected ? 0.11f : 0.08f, selected ? 0.42f : 0.18f, selected ? 0.36f : 0.23f);
-        drawFilledRect2D(buttonX, y, buttonW, buttonH);
-
-        glColor3f(selected ? 0.55f : 0.24f, selected ? 0.98f : 0.45f, selected ? 0.85f : 0.52f);
-        drawFilledRect2D(buttonX + 2.0f, y + buttonH - 5.0f, buttonW - 4.0f, 2.0f);
+        char optionText[64];
+        int j = 0;
+        for (; menuLabels[i][j] && j < static_cast<int>(sizeof(optionText)) - 1; ++j) {
+            optionText[j] = static_cast<char>(toupper(static_cast<unsigned char>(menuLabels[i][j])));
+        }
+        optionText[j] = '\0';
 
         if (selected) {
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            glColor4f(0.20f, 0.92f, 0.72f, 0.18f);
-            drawFilledRect2D(buttonX - 3.0f, y - 3.0f, buttonW + 6.0f, buttonH + 6.0f);
-            glDisable(GL_BLEND);
+            float pulse = 0.5f + 0.5f * sin(static_cast<float>(glutGet(GLUT_ELAPSED_TIME)) * 0.009f);
+
+            glColor3f(0.12f, 0.08f, 0.02f);
+            drawStrokeTextCentered(static_cast<float>(w) * 0.5f - 128.0f, y - 4.0f, optionScale * 0.95f, 2.6f, ">>");
+
+            glColor3f(0.95f, 0.80f + 0.20f * pulse, 0.12f);
+            drawStrokeTextCentered(static_cast<float>(w) * 0.5f - 130.0f, y - 2.0f, optionScale * 0.95f, 2.8f, ">>");
         }
+
+        glColor3f(0.08f, 0.07f, 0.05f);
+        drawStrokeTextCentered(static_cast<float>(w) * 0.5f + 2.5f, y - 4.0f, optionScale, selected ? 3.0f : 2.4f, optionText);
 
         if (selected) {
-            glColor3f(0.95f, 1.0f, 0.96f);
-            drawText2D(buttonX + 18.0f, y + 29.0f, "> ");
+            float pulse = 0.5f + 0.5f * sin(static_cast<float>(glutGet(GLUT_ELAPSED_TIME)) * 0.009f);
+            glColor3f(1.0f, 0.80f + 0.20f * pulse, 0.20f);
+            drawStrokeTextCentered(static_cast<float>(w) * 0.5f, y - 2.0f, optionScale, 3.2f, optionText);
+        } else {
+            glColor3f(0.92f, 0.86f, 0.76f);
+            drawStrokeTextCentered(static_cast<float>(w) * 0.5f, y - 2.0f, optionScale, 2.5f, optionText);
         }
-
-        glColor3f(selected ? 0.95f : 0.82f, selected ? 1.0f : 0.90f, selected ? 0.95f : 0.95f);
-        drawText2DCentered(buttonX + buttonW * 0.5f + 12.0f, y + 29.0f, menuLabels[i]);
     }
 
+    // Controls text at the bottom
     glColor3f(0.70f, 0.78f, 0.82f);
-    drawText2DCentered(static_cast<float>(w) * 0.5f, panelY + 38.0f, "Use W/S or Up/Down to navigate. Press Enter to select.");
+    drawText2DCentered(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.12f, "Use W/S or Up/Down to navigate. Press Enter to select.");
+
 
     glEnable(GL_DEPTH_TEST);
     glPopMatrix();
@@ -2061,10 +2311,7 @@ void drawHighScoreScreen() {
     float panelW = static_cast<float>(w) * 0.72f;
     float panelH = static_cast<float>(h) * 0.76f;
 
-    glColor3f(0.07f, 0.12f, 0.19f);
-    drawFilledRect2D(panelX, panelY, panelW, panelH);
-    glColor3f(0.14f, 0.34f, 0.45f);
-    drawFilledRect2D(panelX + 4.0f, panelY + panelH - 6.0f, panelW - 8.0f, 2.5f);
+    drawPanelBox2D(panelX, panelY, panelW, panelH, 0.07f, 0.12f, 0.19f, 0.14f, 0.34f, 0.45f);
 
     glColor3f(0.4f, 1.0f, 0.9f);
     drawText2DCentered(static_cast<float>(w) * 0.5f, panelY + panelH - 48.0f, "HIGH SCORES");
@@ -2308,11 +2555,17 @@ void drawGameOverScreen() {
 
     glDisable(GL_DEPTH_TEST);
 
+    float panelW = static_cast<float>(w) * 0.56f;
+    float panelH = static_cast<float>(h) * 0.34f;
+    float panelX = (static_cast<float>(w) - panelW) * 0.5f;
+    float panelY = (static_cast<float>(h) - panelH) * 0.5f;
+    drawPanelBox2D(panelX, panelY, panelW, panelH, 0.12f, 0.04f, 0.05f, 0.70f, 0.14f, 0.16f);
+
     glColor3f(1.0f, 0.35f, 0.35f);
-    drawText2DCentered(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.60f, "GAME OVER");
+    drawText2DCentered(static_cast<float>(w) * 0.5f, panelY + panelH * 0.70f, "GAME OVER");
     glColor3f(1.0f, 1.0f, 1.0f);
-    drawText2DCentered(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.52f, "All health is gone.");
-    drawText2DCentered(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.45f, "Press M for menu or Esc to quit.");
+    drawText2DCentered(static_cast<float>(w) * 0.5f, panelY + panelH * 0.50f, "All health is gone.");
+    drawText2DCentered(static_cast<float>(w) * 0.5f, panelY + panelH * 0.33f, "Press M for menu or Esc to quit.");
 
     glEnable(GL_DEPTH_TEST);
     glPopMatrix();
@@ -2422,12 +2675,14 @@ void tryInteraction() {
         if (!weaponClaimed && distance2D(camX, camZ, weaponPickupPos.x, weaponPickupPos.z) < INTERACT_PICKUP_RANGE) {
             weaponClaimed = true;
             interacted = true;
+            playClaimSound();
             cout << "Gun claimed. You can now shoot with left mouse click.\n";
         }
 
         if (!healthPickupClaimed && distance2D(camX, camZ, healthPickupPos.x, healthPickupPos.z) < INTERACT_PICKUP_RANGE) {
             healthPickupClaimed = true;
             interacted = true;
+            playClaimSound();
             cout << "Medkit claimed. Hold key 4 to use it when needed.\n";
         }
 
@@ -2454,6 +2709,7 @@ void tryInteraction() {
             keyTaken[i] = true;
             keysCollected++;
             foundKey = true;
+            playClaimSound();
             cout << "Key " << keysCollected << " collected in level " << (currentLevel + 1) << "\n";
         }
     }
@@ -2463,6 +2719,7 @@ void tryInteraction() {
     float doorDistance = distance2D(camX, camZ, 0.0f, currentDoorZ());
     if (keysCollected >= keysRequired() && !doorOpening && doorDistance < 1.65f) {
         doorOpening = true;
+        playUnlockSound();
         cout << "Exit unlocked for level " << (currentLevel + 1) << "\n";
     } else if (doorDistance < 1.65f && keysCollected < keysRequired()) {
         cout << "Exit locked. Need " << (keysRequired() - keysCollected) << " more key(s).\n";
@@ -2470,7 +2727,15 @@ void tryInteraction() {
 }
 
 void tryGhostAttack() {
-    if (!(gameState == STATE_PLAYING && isGroundLevel() && !groundIntroActive && ghostAlive)) {
+    bool anyGhostAlive = false;
+    for (int gi = 0; gi < NUM_WARRIORS; ++gi) {
+        if (ghostAlive[gi]) {
+            anyGhostAlive = true;
+            break;
+        }
+    }
+
+    if (!(gameState == STATE_PLAYING && isGroundLevel() && !groundIntroActive && anyGhostAlive)) {
         return;
     }
 
@@ -2484,26 +2749,68 @@ void tryGhostAttack() {
         return;
     }
 
-    // Gun shooting - find the warrior we are aiming at (closest within cone)
-    float dirX = sin(yaw);
-    float dirZ = -cos(yaw);
+    // Gun shooting - ray test against warrior body/head (head = double damage)
+    float dirX = cos(pitch) * sin(yaw);
+    float dirY = sin(pitch);
+    float dirZ = -cos(pitch) * cos(yaw);
 
     // Always trigger fire effects
     gunRecoilTimer = 0.15f;
     muzzleFlashTimer = 0.08f;
     weaponAttackCooldown = 0.40f;
 
-    int   bestTarget = -1;
-    float bestDot    = 0.7f;   // minimum dot product to count as aimed
+    int bestTarget = -1;
+    bool bestHitHead = false;
+    float bestT = GHOST_WEAPON_RANGE + 1.0f;
+
+    auto rayHitsSphere = [&](float cx, float cy, float cz, float radius, float& tHit) -> bool {
+        float ocX = cx - camX;
+        float ocY = cy - camY;
+        float ocZ = cz - camZ;
+        float t = ocX * dirX + ocY * dirY + ocZ * dirZ;
+        if (t < 0.0f || t > GHOST_WEAPON_RANGE) {
+            return false;
+        }
+        float distSq = ocX * ocX + ocY * ocY + ocZ * ocZ - t * t;
+        float rSq = radius * radius;
+        if (distSq > rSq) {
+            return false;
+        }
+        tHit = t;
+        return true;
+    };
+
     for (int gi = 0; gi < NUM_WARRIORS; ++gi) {
         if (!ghostAlive[gi]) continue;
-        float toX = ghostX[gi] - camX;
-        float toZ = ghostZ[gi] - camZ;
-        float dist = sqrt(toX * toX + toZ * toZ);
-        if (dist > GHOST_WEAPON_RANGE) continue;
-        float invD = (dist > 0.0001f) ? (1.0f / dist) : 0.0f;
-        float dot  = dirX * (toX * invD) + dirZ * (toZ * invD);
-        if (dot > bestDot) { bestDot = dot; bestTarget = gi; }
+
+        float t = static_cast<float>(glutGet(GLUT_ELAPSED_TIME)) / 1000.0f + static_cast<float>(gi) * 0.77f;
+        float bodyBob = sin(t * 2.8f) * 0.028f;
+
+        float bodyCenterX = ghostX[gi];
+        float bodyCenterY = 1.12f + bodyBob;
+        float bodyCenterZ = ghostZ[gi];
+
+        float headCenterX = ghostX[gi];
+        float headCenterY = 1.66f + bodyBob;
+        float headCenterZ = ghostZ[gi];
+
+        float tHead = 0.0f;
+        if (rayHitsSphere(headCenterX, headCenterY, headCenterZ, 0.24f, tHead)) {
+            if (tHead < bestT) {
+                bestT = tHead;
+                bestTarget = gi;
+                bestHitHead = true;
+            }
+        }
+
+        float tBody = 0.0f;
+        if (rayHitsSphere(bodyCenterX, bodyCenterY, bodyCenterZ, 0.46f, tBody)) {
+            if (tBody < bestT) {
+                bestT = tBody;
+                bestTarget = gi;
+                bestHitHead = false;
+            }
+        }
     }
 
     if (bestTarget < 0) {
@@ -2511,9 +2818,14 @@ void tryGhostAttack() {
         return;
     }
 
-    ghostHealth[bestTarget] -= 1;
+    int damage = bestHitHead ? 2 : 1;
+    ghostHealth[bestTarget] -= damage;
     ghostHitFlashTimer[bestTarget] = 0.25f;
-    cout << "Hit warrior " << bestTarget << "! HP: " << ghostHealth[bestTarget] << "\n";
+    if (bestHitHead) {
+        cout << "HEADSHOT on warrior " << bestTarget << "! -" << damage << " HP: " << ghostHealth[bestTarget] << "\n";
+    } else {
+        cout << "Hit warrior " << bestTarget << "! -" << damage << " HP: " << ghostHealth[bestTarget] << "\n";
+    }
 
     if (ghostHealth[bestTarget] <= 0) {
         ghostHealth[bestTarget] = 0;
@@ -2541,6 +2853,7 @@ void tryGhostAttack() {
             if (allDead) {
                 groundDoorUnlockedByBoss = true;
                 doorOpening = true;
+                playUnlockSound();
                 cout << "All warriors defeated! Escape door unlocking...\n";
             }
         }
@@ -2552,6 +2865,12 @@ void keyboardDown(unsigned char key, int x, int y) {
     (void)y;
 
     unsigned char lower = static_cast<unsigned char>(tolower(key));
+
+    if (lower == 't') {
+        playClaimSound();
+        cout << "SFX test triggered (claim.wav).\n";
+    }
+
     if (gameState == STATE_PLAYING) {
         if (isGroundLevel() && groundIntroActive) {
             if (lower == 13 || lower == 'e') {
@@ -2661,6 +2980,11 @@ void specialKeyDown(int key, int x, int y) {
     (void)x;
     (void)y;
 
+    if (key == GLUT_KEY_F11) {
+        toggleFullscreen();
+        return;
+    }
+
     if (key >= 0 && key < 256) {
         specialStates[key] = true;
     }
@@ -2762,6 +3086,7 @@ void updateVerticalMovement(float dt) {
 void handleLevelExit() {
     if (currentLevel < TOTAL_LEVELS - 1) {
         bonusTimeScore += static_cast<int>(levelTimeRemaining);
+        playLevelUpSound();
         cout << "Level " << (currentLevel + 1) << " complete. Moving to next level.\n";
         startLevel(currentLevel + 1);
     } else {
@@ -2769,6 +3094,7 @@ void handleLevelExit() {
         gameCompleted = true;
         gameState = STATE_NAME_ENTRY;
         resetInputStates();
+        playVictorySound();
         finishGameToHighScore();
         cout << "All levels complete!\n";
     }
