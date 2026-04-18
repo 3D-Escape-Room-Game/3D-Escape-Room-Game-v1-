@@ -143,8 +143,8 @@ GLuint startScreenTexture = 0;
 
 void loadBackgroundTexture() {
     int width, height, channels;
-    unsigned char* data = stbi_load("3d-escape.png", &width, &height, &channels, 4);
-    if (!data) data = stbi_load("../3d-escape.png", &width, &height, &channels, 4);
+    unsigned char* data = stbi_load("assets/images/image.png", &width, &height, &channels, 4);
+    if (!data) data = stbi_load("../assets/images/image.png", &width, &height, &channels, 4);
     if (data) {
         glGenTextures(1, &startScreenTexture);
         glBindTexture(GL_TEXTURE_2D, startScreenTexture);
@@ -154,9 +154,9 @@ void loadBackgroundTexture() {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
         gluBuild2DMipmaps(GL_TEXTURE_2D, GL_RGBA, width, height, GL_RGBA, GL_UNSIGNED_BYTE, data);
         stbi_image_free(data);
-        cout << "Loaded 3d-escape.png successfully.\n";
+        cout << "Loaded assets/images/image.png successfully.\n";
     } else {
-        cout << "Failed to load 3d-escape.png. Reason: " << stbi_failure_reason() << "\n";
+        cout << "Failed to load assets/images/image.png. Reason: " << stbi_failure_reason() << "\n";
     }
 }
 
@@ -361,6 +361,43 @@ void drawText2DRightAligned(float rightX, float y, const char* text) {
 void drawText2DCentered(float centerX, float y, const char* text) {
     drawText2D(centerX - static_cast<float>(bitmapTextWidth(text)) * 0.5f, y, text);
 }
+
+int timesRomanTextWidth(const char* text) {
+    return glutBitmapLength(GLUT_BITMAP_TIMES_ROMAN_24, reinterpret_cast<const unsigned char*>(text));
+}
+
+void drawTimesRomanText2D(float x, float y, const char* text) {
+    glRasterPos2f(x, y);
+    for (const char* p = text; *p; ++p) {
+        glutBitmapCharacter(GLUT_BITMAP_TIMES_ROMAN_24, *p);
+    }
+}
+
+void drawTimesRomanText2DCentered(float centerX, float y, const char* text) {
+    drawTimesRomanText2D(centerX - static_cast<float>(timesRomanTextWidth(text)) * 0.5f, y, text);
+}
+
+void drawStrokeText(float x, float y, float scale, float lineWidth, const char* text) {
+    glPushMatrix();
+    glTranslatef(x, y, 0.0f);
+    glScalef(scale, scale, 1.0f);
+    glLineWidth(lineWidth);
+    for (const char* p = text; *p; ++p) {
+        glutStrokeCharacter(GLUT_STROKE_ROMAN, *p);
+    }
+    glLineWidth(1.0f);
+    glPopMatrix();
+}
+
+void drawStrokeTextCentered(float centerX, float y, float scale, float lineWidth, const char* text) {
+    float width = 0.0f;
+    for (const char* p = text; *p; ++p) {
+        width += glutStrokeWidth(GLUT_STROKE_ROMAN, *p);
+    }
+    width *= scale;
+    drawStrokeText(centerX - width * 0.5f, y, scale, lineWidth, text);
+}
+
 
 void resetInputStates() {
     for (int i = 0; i < 256; ++i) {
@@ -1935,32 +1972,12 @@ void drawMenuScreen() {
 
     glDisable(GL_DEPTH_TEST);
 
-    float t = static_cast<float>(glutGet(GLUT_ELAPSED_TIME));
-
-    if (startScreenTexture == 0) {
-        glBegin(GL_QUADS);
-        glColor3f(0.03f, 0.07f, 0.11f); glVertex2f(0.0f, 0.0f);
-        glColor3f(0.03f, 0.07f, 0.11f); glVertex2f(static_cast<float>(w), 0.0f);
-        glColor3f(0.02f, 0.03f, 0.08f); glVertex2f(static_cast<float>(w), static_cast<float>(h));
-        glColor3f(0.02f, 0.03f, 0.08f); glVertex2f(0.0f, static_cast<float>(h));
-        glEnd();
-
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        float glowX = static_cast<float>(w) * 0.5f + sin(t * 0.0011f) * static_cast<float>(w) * 0.25f;
-        float glowY = static_cast<float>(h) * 0.72f + cos(t * 0.0013f) * 36.0f;
-        glColor4f(0.10f, 0.60f, 0.85f, 0.12f);
-        drawFilledRect2D(glowX - 220.0f, glowY - 100.0f, 440.0f, 200.0f);
-        glColor4f(0.05f, 0.35f, 0.60f, 0.10f);
-        drawFilledRect2D(glowX - 330.0f, glowY - 170.0f, 660.0f, 340.0f);
-        glDisable(GL_BLEND);
-    }
-
     if (startScreenTexture != 0) {
         glEnable(GL_TEXTURE_2D);
         glBindTexture(GL_TEXTURE_2D, startScreenTexture);
         glColor3f(1.0f, 1.0f, 1.0f);
 
+        // 1. Draw base sharp image
         glBegin(GL_QUADS);
         glTexCoord2f(0.0f, 0.0f); glVertex2f(0.0f, h);
         glTexCoord2f(1.0f, 0.0f); glVertex2f(w, h);
@@ -1968,71 +1985,78 @@ void drawMenuScreen() {
         glTexCoord2f(0.0f, 1.0f); glVertex2f(0.0f, 0.0f);
         glEnd();
 
-        glDisable(GL_TEXTURE_2D);
-
-        // Add a dark semi-transparent overlay over the image so it looks slightly blurry/dim
+        // 2. Multi-pass pseudo blur
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glColor4f(0.05f, 0.05f, 0.1f, 0.70f);
-        drawFilledRect2D(0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h));
+        
+        glColor4f(1.0f, 1.0f, 1.0f, 0.15f);
+        float blurRadius = 2.5f;
+        float offsets[4][2] = {
+            {-blurRadius, -blurRadius},
+            {blurRadius, -blurRadius},
+            {-blurRadius, blurRadius},
+            {blurRadius, blurRadius}
+        };
+
+        for (int i = 0; i < 4; ++i) {
+            float ox = offsets[i][0];
+            float oy = offsets[i][1];
+            glBegin(GL_QUADS);
+            glTexCoord2f(0.0f, 0.0f); glVertex2f(ox, h + oy);
+            glTexCoord2f(1.0f, 0.0f); glVertex2f(w + ox, h + oy);
+            glTexCoord2f(1.0f, 1.0f); glVertex2f(w + ox, oy);
+            glTexCoord2f(0.0f, 1.0f); glVertex2f(ox, oy);
+            glEnd();
+        }
+
+        glDisable(GL_TEXTURE_2D);
+
+        // 3. Dark dimming overlay to make text pop
+        glColor4f(0.05f, 0.05f, 0.08f, 0.35f);
+        glBegin(GL_QUADS);
+        glVertex2f(0.0f, 0.0f);
+        glVertex2f(w, 0.0f);
+        glVertex2f(w, h);
+        glVertex2f(0.0f, h);
+        glEnd();
+
         glDisable(GL_BLEND);
+    } else {
+        // Fallback background
+        glBegin(GL_QUADS);
+        glColor3f(0.03f, 0.07f, 0.11f); glVertex2f(0.0f, 0.0f);
+        glColor3f(0.03f, 0.07f, 0.11f); glVertex2f(static_cast<float>(w), 0.0f);
+        glColor3f(0.02f, 0.03f, 0.08f); glVertex2f(static_cast<float>(w), static_cast<float>(h));
+        glColor3f(0.02f, 0.03f, 0.08f); glVertex2f(0.0f, static_cast<float>(h));
+        glEnd();
     }
 
-    float panelX = static_cast<float>(w) * 0.22f;
-    float panelY = static_cast<float>(h) * 0.15f;
-    float panelW = static_cast<float>(w) * 0.56f;
-    float panelH = static_cast<float>(h) * 0.72f;
-
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glColor4f(0.04f, 0.09f, 0.13f, 0.88f);
-    drawFilledRect2D(panelX - 8.0f, panelY - 8.0f, panelW + 16.0f, panelH + 16.0f);
-    glDisable(GL_BLEND);
-
-    glColor3f(0.08f, 0.14f, 0.18f);
-    drawFilledRect2D(panelX, panelY, panelW, panelH);
-    glColor3f(0.15f, 0.28f, 0.34f);
-    drawFilledRect2D(panelX + 4.0f, panelY + panelH - 6.0f, panelW - 8.0f, 2.5f);
-
-    glColor3f(0.52f, 1.0f, 0.80f);
-    drawText2DCentered(static_cast<float>(w) * 0.5f, panelY + panelH - 72.0f, "3D ESCAPE ROOM");
+    // Draw "3D ESCAPE ROOM" subtitle and descriptions
+    glColor3f(0.85f, 0.75f, 0.40f); // Goldish title
+    drawTimesRomanText2DCentered(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.81f, "3D ESCAPE ROOM");
     glColor3f(0.85f, 0.93f, 0.98f);
-    drawText2DCentered(static_cast<float>(w) * 0.5f, panelY + panelH - 106.0f, "Rooms, climbing, timer pressure, and final survival.");
+    drawText2DCentered(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.78f, "Rooms, climbing, timer pressure, and final survival.");
 
-    float buttonW = panelW * 0.60f;
-    float buttonH = 46.0f;
-    float buttonX = panelX + (panelW - buttonW) * 0.5f;
-    float firstButtonY = panelY + panelH * 0.52f;
+    // Center buttons over the door
+    float firstButtonY = static_cast<float>(h) * 0.58f;
 
     for (int i = 0; i < MENU_ITEMS; ++i) {
-        float y = firstButtonY - i * 72.0f;
+        float y = firstButtonY - i * 65.0f;
         bool selected = (i == menuSelection);
 
-        glColor3f(selected ? 0.11f : 0.08f, selected ? 0.42f : 0.18f, selected ? 0.36f : 0.23f);
-        drawFilledRect2D(buttonX, y, buttonW, buttonH);
-
-        glColor3f(selected ? 0.55f : 0.24f, selected ? 0.98f : 0.45f, selected ? 0.85f : 0.52f);
-        drawFilledRect2D(buttonX + 2.0f, y + buttonH - 5.0f, buttonW - 4.0f, 2.0f);
-
         if (selected) {
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            glColor4f(0.20f, 0.92f, 0.72f, 0.18f);
-            drawFilledRect2D(buttonX - 3.0f, y - 3.0f, buttonW + 6.0f, buttonH + 6.0f);
-            glDisable(GL_BLEND);
+            glColor3f(0.95f, 0.85f, 0.20f); // Gold selection arrow
+            drawTimesRomanText2DCentered(static_cast<float>(w) * 0.5f - 85.0f, y, ">");
         }
 
-        if (selected) {
-            glColor3f(0.95f, 1.0f, 0.96f);
-            drawText2D(buttonX + 18.0f, y + 29.0f, "> ");
-        }
-
-        glColor3f(selected ? 0.95f : 0.82f, selected ? 1.0f : 0.90f, selected ? 0.95f : 0.95f);
-        drawText2DCentered(buttonX + buttonW * 0.5f + 12.0f, y + 29.0f, menuLabels[i]);
+        glColor3f(selected ? 0.95f : 0.85f, selected ? 0.90f : 0.80f, selected ? 0.80f : 0.85f);
+        drawTimesRomanText2DCentered(static_cast<float>(w) * 0.5f, y, menuLabels[i]);
     }
 
+    // Controls text at the bottom
     glColor3f(0.70f, 0.78f, 0.82f);
-    drawText2DCentered(static_cast<float>(w) * 0.5f, panelY + 38.0f, "Use W/S or Up/Down to navigate. Press Enter to select.");
+    drawText2DCentered(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.12f, "Use W/S or Up/Down to navigate. Press Enter to select.");
+
 
     glEnable(GL_DEPTH_TEST);
     glPopMatrix();
