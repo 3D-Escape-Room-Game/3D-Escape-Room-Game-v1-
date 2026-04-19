@@ -21,6 +21,14 @@
 
 using namespace std;
 
+// Team contribution guide for teacher review:
+// - Base game structure, integration, and bug fixes: project lead
+// - Room interior, obstacles, and ground-level environment: Asif
+// - Time logic, ghosts, weapons, and combat systems: Jahid
+// - Start screen design + background image presentation: Sara
+// - Gaming text changes, font/style polish, and text readability: Nila
+// The same breakdown is also documented in docs/TEAM_MEMBER_DETAILS.txt.
+
 struct Vec2 {
     float x;
     float z;
@@ -158,6 +166,7 @@ const Obstacle levelObstacles[TOTAL_LEVELS][MAX_OBSTACLES] = {
 GLuint startScreenTexture = 0;
 
 void loadBackgroundTexture() {
+    // Sara: start-screen background image loading and visual setup.
     int width, height, channels;
     unsigned char* data = stbi_load("assets/images/image.png", &width, &height, &channels, 4);
     if (!data) data = stbi_load("../assets/images/image.png", &width, &height, &channels, 4);
@@ -662,6 +671,7 @@ void startMenu() {
 }
 
 void startGame() {
+    // Project lead: core game-flow bootstrap and integration across all levels.
     bonusTimeScore = 0;
     pendingScore = 0;
     playerLives = MAX_LIVES;
@@ -712,6 +722,7 @@ void spawnBonusClock() {
 }
 
 void resetLevelCore() {
+    // Project lead + Jahid: per-level reset state, including timer/combat variables.
     keysCollected = 0;
     for (int i = 0; i < MAX_KEYS; ++i) {
         keyTaken[i] = false;
@@ -766,6 +777,7 @@ void resetLevelCore() {
 }
 
 void startLevel(int levelIndex) {
+    // Asif: obstacle setup for room/ground layout. Project lead: level state wiring.
     currentLevel = levelIndex;
     gameState = STATE_PLAYING;
     gameOver = false;
@@ -1416,6 +1428,7 @@ void renderDoorOrGate() {
 }
 
 void renderObstacles() {
+    // Asif: obstacle visuals and environment obstacle style for both level types.
     for (int i = 0; i < obstacleCount(); ++i) {
         const Obstacle& obstacle = activeObstacles[i];
 
@@ -1732,6 +1745,7 @@ void renderKeys() {
 }
 
 void renderRoomLevel() {
+    // Asif: room interior design and environment decoration pass.
     float halfSize = worldHalfSize();
 
     // Dark stone floor
@@ -1796,6 +1810,7 @@ void renderRoomLevel() {
 }
 
 void renderGroundLevel() {
+    // Asif: ground-level environment layout and scene structure.
     float halfSize = worldHalfSize();
 
     glColor3f(0.18f, 0.50f, 0.18f);
@@ -1849,6 +1864,7 @@ void drawHUDBar(float x, float y, float w, float h, float ratio, float r, float 
 }
 
 void drawHUD() {
+    // Nila: in-game objective wording, status text clarity, and HUD text readability.
     int w = glutGet(GLUT_WINDOW_WIDTH);
     int h = glutGet(GLUT_WINDOW_HEIGHT);
 
@@ -2102,6 +2118,7 @@ void drawHUD() {
 }
 
 void drawRulesScreen() {
+    // Nila: gameplay rules text wording, ordering, and readability improvements.
     int w = glutGet(GLUT_WINDOW_WIDTH);
     int h = glutGet(GLUT_WINDOW_HEIGHT);
 
@@ -2154,6 +2171,8 @@ void drawRulesScreen() {
 }
 
 void drawMenuScreen() {
+    // Sara: start-screen design and background image based menu presentation.
+    // Nila: gaming/menu text wording and typography readability.
     int w = glutGet(GLUT_WINDOW_WIDTH);
     int h = glutGet(GLUT_WINDOW_HEIGHT);
 
@@ -2292,6 +2311,7 @@ void drawMenuScreen() {
 }
 
 void drawHighScoreScreen() {
+    // Nila: high-score text layout and readable leaderboard wording/style.
     int w = glutGet(GLUT_WINDOW_WIDTH);
     int h = glutGet(GLUT_WINDOW_HEIGHT);
 
@@ -2377,6 +2397,7 @@ void drawHighScoreScreen() {
 }
 
 void drawNameEntryScreen() {
+    // Shared final UI: name entry shown after completion.
     int w = glutGet(GLUT_WINDOW_WIDTH);
     int h = glutGet(GLUT_WINDOW_HEIGHT);
     float timeSec = static_cast<float>(glutGet(GLUT_ELAPSED_TIME)) / 1000.0f;
@@ -2575,6 +2596,7 @@ void drawGameOverScreen() {
 }
 
 void renderWorld() {
+    // Core world rendering used by all team-built gameplay systems.
     if (isGroundLevel()) {
         renderGroundLevel();
     } else {
@@ -2593,6 +2615,7 @@ void renderWorld() {
 }
 
 void display() {
+    // Project lead: main render pipeline and screen/state routing.
     if (gameState == STATE_GAME_OVER) {
         glClearColor(0.07f, 0.02f, 0.02f, 1.0f);
     } else if (gameState == STATE_NAME_ENTRY) {
@@ -2727,6 +2750,7 @@ void tryInteraction() {
 }
 
 void tryGhostAttack() {
+    // Jahid: ghost combat logic, weapon hit detection, and wave progression.
     bool anyGhostAlive = false;
     for (int gi = 0; gi < NUM_WARRIORS; ++gi) {
         if (ghostAlive[gi]) {
@@ -3101,6 +3125,7 @@ void handleLevelExit() {
 }
 
 void update(int value) {
+    // Jahid: timer/combat updates. Project lead: central frame update integration.
     (void)value;
 
     int now = glutGet(GLUT_ELAPSED_TIME);

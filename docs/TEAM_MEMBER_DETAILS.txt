@@ -1,0 +1,90 @@
+TEAM MEMBER DETAILS FOR TEACHER REVIEW
+
+Project: 3D Escape Room Game (OpenGL C++)
+
+This file explains which parts of the project were built by each team member.
+It matches the workflow summary in TEAM_WORK_SCRIPT.txt and helps the teacher
+quickly see each member's contribution in main.cpp.
+
+1) Project lead / integration
+- Built the first base game structure.
+- Created the GitHub organization and repository.
+- Pushed the initial project and shared it with the team.
+- Reviewed commits, fixed bugs, and merged changes into the master branch.
+
+main.cpp areas:
+- Global setup, shared constants, core state management.
+- Game flow functions such as start menu, game reset, and state switching.
+- Final integration and bug fixes across the whole file.
+
+Code references in main.cpp:
+- `startGame()`, `startMenu()`, `openHighScoreScreen()`, `beginNameEntry()`
+- `resetLevelCore()`, `startLevel()`
+- `display()` and overall render/state routing
+
+2) Asif
+- Designed the room interior.
+- Created and tuned obstacles.
+- Helped with ground-level changes.
+
+main.cpp areas:
+- Room and ground environment rendering.
+- Obstacle layout arrays and obstacle movement data.
+- Obstacle collision, wall bounce, and level geometry logic.
+
+Code references in main.cpp:
+- `renderRoomLevel()`
+- `renderGroundLevel()`
+- `renderObstacles()`
+- Level obstacle data arrays (`levelObstacles`, `obstacleHeightByLevel`)
+
+3) Jahid
+- Updated the time logic.
+- Added ghosts on the ground level.
+- Added weapons and combat behavior.
+
+main.cpp areas:
+- Timer logic and bonus-time systems.
+- Ghost / warrior spawn, health, movement, and damage logic.
+- Weapon pickup, gun attack, recoil, and muzzle flash logic.
+- Ground-level combat HUD and defeat/win progression.
+
+Code references in main.cpp:
+- `update()` (timer countdown and bonus clock logic)
+- `tryGhostAttack()` (combat + wave progression)
+- Ground-combat state inside `resetLevelCore()`
+- Gun/ghost gameplay variables near ghost + weapon sections
+
+4) Sara
+- Designed the start screen.
+- Added start-screen background image usage.
+- Suggested bug fixes.
+
+main.cpp areas:
+- Start screen visuals and background image presentation.
+- Menu screen structure and startup look.
+
+Code references in main.cpp:
+- `loadBackgroundTexture()`
+- `drawMenuScreen()` (background image + start menu visuals)
+
+5) Nila
+- Improved gaming text content and wording.
+- Improved font style and on-screen text readability.
+
+main.cpp areas:
+- Menu, HUD, and rules/game text presentation.
+- High-score screen rendering.
+- Name entry screen and text presentation.
+- Menu navigation and UI polish.
+
+Code references in main.cpp:
+- `drawHUD()` (objective/status wording)
+- `drawRulesScreen()` (rules text and readability)
+- `drawHighScoreScreen()`
+- `drawNameEntryScreen()`
+- Text styling/wording used in `drawMenuScreen()`
+
+Quick teacher note:
+- For a fast review, search in main.cpp for the section comments that mention
+  each member name and the feature group they worked on.
